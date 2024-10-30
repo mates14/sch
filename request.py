@@ -222,8 +222,13 @@ def fetch_requests(conn, slice_size: int) -> List[Request]:
                t.tar_info, t.interruptible, t.tar_pm_ra, t.tar_pm_dec, t.tar_telescope_mode,
                (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id) AS last_observation_time
         FROM targets t
-        WHERE t.tar_enabled = TRUE AND t.tar_id BETWEEN 1000 AND 49999
+        WHERE 
+        t.tar_enabled = TRUE
+        AND t.tar_id BETWEEN 1000 AND 49999
     """
+        #AND t.tar_priority > 0
+        #AND t.tar_ra > 0
+        #AND t.tar_dec > 0
     try:
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute(query)
@@ -243,7 +248,7 @@ def fetch_requests(conn, slice_size: int) -> List[Request]:
                 try:
                     exptime = 60 * 10**(( mag - 15.0 )/1.25) # 30 sigma
                     reqtime = exptime * 1.1 # 30 sigma
-                    #print(name, mag, reqtime)
+                    print(name, mag, reqtime)
                     duration = ceil(reqtime/300)*300
                 except (TypeError, ValueError): # get_magnitude returns some None, NoneType or so...
                     # duration = median_durations.get(tar_id, default_duration)
