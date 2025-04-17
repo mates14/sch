@@ -48,9 +48,116 @@ def timing(name):
     start = time.time()
     yield
     end = time.time()
-    print(f"timing {name}: {(end - start):.1f} ms")
+    print(f"timing {name}: {(end - start):.1f}s")
 
-def check_telescope_state():
+def check_telescope_state(config):
+    """
+    Check state of all telescopes and return a dictionary of available telescopes.
+    A telescope is available for scheduling if it's in state ON and either DUSK or NIGHT.
+
+    Args:
+        config: Configuration object with telescope information
+
+    Returns:
+        Dictionary mapping telescope names to availability (True/False)
+    """
+    logger.info("Checking telescope states...")
+    available_telescopes = {}
+
+    try:
+        # Get all telescope resources
+        resources = config.get_resources()
+
+        for resource_name, resource_info in resources.items():
+            try:
+                # Get RTS2 configuration for this telescope
+                rts2_config = config.get_resource_rts2_config(resource_name)
+                if not rts2_config:
+                    logger.warning(f"No RTS2 configuration for telescope {resource_name}, assuming unavailable")
+                    available_telescopes[resource_name] = False
+                    continue
+
+                # Parse URL to get host and port
+                url = rts2_config["url"].replace('http://', '')
+                host_parts = url.split(':')
+                host = host_parts[0]
+                port = int(host_parts[1]) if len(host_parts) > 1 else 8889
+
+                # Get auth info
+                username = rts2_config["user"]
+                password = rts2_config["password"]
+
+                # Make HTTP request to get centrald state
+                import http.client
+                import base64
+                import json
+
+                # Set up authentication
+                auth_header = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode().strip()
+                headers = {"Authorization": auth_header}
+
+                # Establish connection
+                conn = http.client.HTTPConnection(host, port)
+
+                # Make request to /api/get for centrald
+                query = "/api/get?d=centrald"
+                conn.request("GET", query, None, headers)
+
+                # Get response
+                response = conn.getresponse()
+
+                if response.status != 200:
+                    logger.error(f"Error getting state for {resource_name}: Got status code {response.status}")
+                    available_telescopes[resource_name] = False
+                    continue
+
+                # Parse response
+                state_data = json.loads(response.read())
+
+                if 'state' not in state_data:
+                    logger.warning(f"No state information for telescope {resource_name}, assuming unavailable")
+                    available_telescopes[resource_name] = False
+                    continue
+
+                # Parse state value
+                state_value = state_data['state']
+
+                # Extract the two parts
+                on_state = (state_value & 0x30) >> 4
+                day_state = state_value & 0x0f
+
+                # Telescope is available for scheduling if it's ON (2) and either DUSK (2) or NIGHT (3)
+                is_available = (on_state == 2 and day_state in [2, 3])
+
+                # Get human-readable state description
+                on_states = {0: "ON", 1: "STANDBY", 2: "UNKNOWN", 3: "OFF"}
+                day_states = {0: "DAY", 1: "EVENING", 2: "DUSK", 3: "NIGHT", 4: "DAWN", 5: "MORNING"}
+
+                on_text = on_states.get(on_state, f"UNKNOWN({on_state})")
+                day_text = day_states.get(day_state, f"UNKNOWN({day_state})")
+                full_text = f"{on_text} {day_text}"
+
+                logger.info(f"Telescope {resource_name} state: {state_value} (0x{state_value:x}, {full_text}), "
+                           f"Available: {is_available}")
+
+                available_telescopes[resource_name] = is_available
+
+            except Exception as e:
+                logger.error(f"Error checking state for telescope {resource_name}: {e}")
+                available_telescopes[resource_name] = False
+
+        # Check if any telescopes are available
+        if not any(available_telescopes.values()):
+            logger.warning("No telescopes are available for scheduling. Exiting.")
+            sys.exit(0)
+
+        return available_telescopes
+
+    except Exception as e:
+        logger.error(f"Failed to check telescope states: {e}")
+        sys.exit(1)
+
+def check_telescope_state_shell():
     try:
         # Run the command and capture output
         result = subprocess.run(['/usr/local/bin/rts2-state', '-c'],
@@ -733,12 +840,15 @@ def main():
 
         # Check telescope state before proceeding
         if not args.skip_state_check:
-            check_telescope_state()
+            available_telescopes = check_telescope_state(config)  # Returns dict of available telescopes
         else:
-            logger.warning("Skipping telescope state check")
+            logger.warning("Skipping telescope state check, assuming all telescopes available")
+            available_telescopes = {res: True for res in config.get_resources().keys()}
 
-        # Prepare resources for telescopes
+        # Prepare resources for telescopes (only available ones)
         resources = prepare_resources(config)
+        resources = {name: resource for name, resource in all_resources.items()
+                    if available_telescopes.get(name, False)}
         logger.info(f"Prepared resources for {len(resources)} telescopes")
 
         # Run the scheduler
