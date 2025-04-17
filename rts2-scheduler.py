@@ -861,9 +861,9 @@ resources = prepare_resources()
 schedule, recorder = run_scheduler(resources)
 
 # Upload to RTS2 if schedule is not empty
-#with timing("Upload Schedule to RTS2"):
-#    if any(observations for observations in schedule.values()):
-#        upload_schedule_to_rts2(schedule, "http://localhost:8889", "scheduler", "EdHijcabr2")
+with timing("Upload Schedule to RTS2"):
+    if any(observations for observations in schedule.values()):
+        upload_schedule_to_rts2(schedule, "http://localhost:8889", "scheduler", "EdHijcabr2")
 
 # Visualize if needed
 with timing("Visualize the Schedule"):
