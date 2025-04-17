@@ -48,7 +48,7 @@ def timing(name):
     start = time.time()
     yield
     end = time.time()
-    #print(f"timing {name}: {(end - start)*1000:.3f} ms")
+    print(f"timing {name}: {(end - start):.1f} ms")
 
 def check_telescope_state():
     try:
@@ -271,13 +271,14 @@ def prepare_sun_positions(start_time, end_time, slice_size, resources):
     return sun_positions, slice_centers
 
 
-def calculate_visibility_with_precalc(target, resources, slice_centers, sun_positions, horizon_func):
-    """Calculate visibility using pre-calculated sun positions."""
+def calculate_visibility_with_precalc(target, resources, slice_centers, sun_positions, horizon_functions):
+    """Calculate visibility using pre-calculated sun positions and telescope-specific horizons."""
     visibility_intervals = {}
 
     for resource_name, resource_info in resources.items():
         observatory = resource_info['earth_location']
         sun_low = sun_positions[resource_name]['is_night']
+        horizon_func = horizon_functions[resource_name]
 
         if target is not None:
             # Calculate target position for the slice centers
@@ -288,7 +289,7 @@ def calculate_visibility_with_precalc(target, resources, slice_centers, sun_posi
                                   frame='icrs')
             target_altaz = target_coord.transform_to(altaz_frame)
 
-            # Check horizon limits
+            # Check horizon limits using telescope-specific horizon
             horizon_alt = horizon_func(target_altaz.az.degree)
             target_high = target_altaz.alt.degree > horizon_alt
 
@@ -314,13 +315,47 @@ def calculate_visibility_with_precalc(target, resources, slice_centers, sun_posi
         if start_idx is not None:
             visible_intervals.append((
                 slice_centers[start_idx],
-                slice_centers[-1] + timedelta(seconds=slice_size)
+                slice_centers[-1] + timedelta(seconds=300)  # Assuming slice_size=300
             ))
 
         visibility_intervals[resource_name] = visible_intervals
 
     return visibility_intervals
 
+
+def load_horizon_for_resource(resource_name, resource_info, config):
+    """Load horizon data for a specific resource."""
+    # Get the horizon file path from resource config or use default
+    horizon_file = None
+    min_altitude = None
+
+    # First check if resource has its own horizon configuration
+    if 'horizon_file' in resource_info:
+        horizon_file = resource_info['horizon_file']
+
+    if 'min_altitude' in resource_info:
+        min_altitude = resource_info['min_altitude']
+
+    # Fall back to global config if necessary
+    if horizon_file is None:
+        horizon_file = config.get_scheduler_param('default_horizon_file')
+
+    if min_altitude is None:
+        min_altitude = config.get_scheduler_param('default_min_altitude', 20.0)
+
+    # If still no horizon file, use a hardcoded default
+    if horizon_file is None:
+        horizon_file = "/etc/rts2/horizon"
+        logger.warning(f"No horizon file specified for {resource_name}, using default: {horizon_file}")
+
+    logger.info(f"Loading horizon for {resource_name} from {horizon_file} with min altitude {min_altitude}")
+
+    # Load the horizon function
+    return load_horizon(
+        horizon_file,
+        resource_info['earth_location'],
+        min_altitude
+    )
 
 def prepare_resources(config: Config):
     """
@@ -402,7 +437,7 @@ def fetch_requests_from_telescopes(resources, config, slice_size):
 
 
 def create_compound_reservations(all_requests, request_dicts_by_resource,
-                              resources, slice_centers, sun_positions, horizon_func):
+                              resources, slice_centers, sun_positions, horizon_functions):
     """
     Create compound reservations for targets that appear in multiple telescopes.
 
@@ -412,7 +447,7 @@ def create_compound_reservations(all_requests, request_dicts_by_resource,
         resources: Dictionary of telescope resources
         slice_centers: Pre-calculated slice centers
         sun_positions: Pre-calculated sun positions
-        horizon_func: Function to calculate horizon limits
+        horizon_functions: Dictionary of horizon functions for each telescope
 
     Returns:
         List of compound reservations
@@ -427,7 +462,7 @@ def create_compound_reservations(all_requests, request_dicts_by_resource,
 
         # Calculate visibility for this request
         visibility_windows = calculate_visibility_with_precalc(
-            request, resources, slice_centers, sun_positions, horizon_func
+            request, resources, slice_centers, sun_positions, horizon_functions
         )
 
         # Create and filter windows
@@ -568,19 +603,13 @@ def prepare_scheduler_input(resources, config, slice_size, schedule_recorder):
     Returns:
         Tuple of (global windows dict, compound reservations, start time)
     """
-    with timing("load_horizon"):
-        # Load horizon data - we use the reference telescope for horizon location
-        reference_resource = next(iter(resources.values()))
-        reference_location = reference_resource['earth_location']
-
-        horizon_file = config.get_scheduler_param('horizon_file')
-        min_altitude = config.get_scheduler_param('min_altitude', 20.0)
-
-        horizon_func = load_horizon(
-            horizon_file,
-            reference_location,
-            min_altitude
-        )
+    with timing("load_horizons"):
+        # Load horizon data for each telescope
+        horizon_functions = {}
+        for resource_name, resource_info in resources.items():
+            horizon_functions[resource_name] = load_horizon_for_resource(
+                resource_name, resource_info, config
+            )
 
     with timing("get_schedule_time_range"):
         # Set up time range for scheduling
@@ -615,7 +644,7 @@ def prepare_scheduler_input(resources, config, slice_size, schedule_recorder):
 
     # Get global visibility windows
     night_interval = calculate_visibility_with_precalc(
-        None, resources, slice_centers, sun_positions, horizon_func
+        None, resources, slice_centers, sun_positions, horizon_functions
     )
     globally_possible_windows_dict = {
         resource: Intervals(windows)
@@ -636,7 +665,7 @@ def prepare_scheduler_input(resources, config, slice_size, schedule_recorder):
     with timing("create_compound_reservations"):
         compound_reservations = create_compound_reservations(
             all_requests, request_dicts_by_resource,
-            resources, slice_centers, sun_positions, horizon_func
+            resources, slice_centers, sun_positions, horizon_functions
         )
 
     # Calculate airmass data for final set
