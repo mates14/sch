@@ -846,7 +846,7 @@ def main():
             available_telescopes = {res: True for res in config.get_resources().keys()}
 
         # Prepare resources for telescopes (only available ones)
-        resources = prepare_resources(config)
+        all_resources = prepare_resources(config)
         resources = {name: resource for name, resource in all_resources.items()
                     if available_telescopes.get(name, False)}
         logger.info(f"Prepared resources for {len(resources)} telescopes")
