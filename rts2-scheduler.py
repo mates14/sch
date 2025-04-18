@@ -827,7 +827,7 @@ def run_scheduler(resources, config, slice_size=None):
 def main():
     """Main function to run the scheduler."""
     parser = argparse.ArgumentParser(description='RTS2 dual telescope scheduler')
-    parser.add_argument('--config', '-c', default='sch.cfg',
+    parser.add_argument('--config', '-c', default='rts2-scheduler.cfg',
                         help='Path to configuration file')
     parser.add_argument('--skip-state-check', '-f', action='store_true',
                         help='Skip telescope state check (for testing)')
