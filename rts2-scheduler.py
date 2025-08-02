@@ -405,12 +405,12 @@ def load_horizon(file_path: str, location: EarthLocation, min_altitude: float = 
 
     Args:
         file_path: Path to horizon file
-        location: Observatory location
+        location: Observatory location (unused if file is already AZ-ALT)
         min_altitude: Minimum allowed altitude in degrees (default: 20.0)
 
     Returns:
-        Interpolation function that returns horizon altitude for given azimuth,
-        ensuring returned values are never below min_altitude
+        Interpolation function that returns horizon altitude for astronomical azimuth
+        (0°=South), ensuring returned values are never below min_altitude
     """
     az = []
     alt = []
@@ -448,24 +448,54 @@ def load_horizon(file_path: str, location: EarthLocation, min_altitude: float = 
             dec_array = np.array(dec)
             alt_array, az_array = hadec_to_altaz_vectorized(ha_array, dec_array, location)
             az = list(az_array)
-            # Apply minimum altitude constraint
+            # Apply minimum altitude constraint and convert to astronomical coordinates
             alt = list(np.maximum(alt_array, min_altitude))
+            # Convert from astropy compass coordinates to astronomical coordinates
+            az = [(a + 180) % 360 for a in az]
 
-    # Ensure circular condition and convert to arrays
+    # Robust circular condition handling
     with timing("array conversion"):
-        if az[0] != 360:
-            az.append(360)
-            alt.append(alt[0])
+        # Convert to numpy arrays for easier manipulation
         az = np.array(az)
         alt = np.array(alt)
+
+        # Sort by azimuth
+        sort_idx = np.argsort(az)
+        az = az[sort_idx]
+        alt = alt[sort_idx]
+
+        # Check for 0° point
+        has_zero = np.any(np.isclose(az, 0.0, atol=1e-6))
+
+        # Check for 360° point
+        has_360 = np.any(np.isclose(az, 360.0, atol=1e-6))
+
+        # Handle missing endpoints
+        if not has_zero:
+            # Find altitude at 0° by interpolating from existing data
+            # Wrap around: use points near 360° and near 0°
+            if len(az) > 1:
+                # Simple approach: use the altitude from the last point (closest to 360°)
+                alt_at_zero = alt[-1]
+            else:
+                alt_at_zero = min_altitude
+            az = np.concatenate([[0.0], az])
+            alt = np.concatenate([[alt_at_zero], alt])
+
+        if not has_360:
+            # Find altitude at 360° - should be same as at 0°
+            zero_idx = np.where(np.isclose(az, 0.0, atol=1e-6))[0][0]
+            alt_at_360 = alt[zero_idx]
+            az = np.concatenate([az, [360.0]])
+            alt = np.concatenate([alt, [alt_at_360]])
 
     with timing("interpolation setup"):
         result = interp1d(az, alt, kind='linear', fill_value='extrapolate')
 
     print(f"horizon: {len(az)} points, ", 'azalt' if is_azalt else 'hadec', " format")
     print(f"minimum altitude set to {min_altitude} degrees")
+    print(f"azimuth range: {az.min():.1f}° to {az.max():.1f}°")
     return result
-
 
 def prepare_sun_positions(start_time, end_time, slice_size, resources):
     """Pre-compute sun positions for all time slices."""
@@ -495,7 +525,6 @@ def prepare_sun_positions(start_time, end_time, slice_size, resources):
 
     return sun_positions, slice_centers
 
-
 def calculate_visibility_with_precalc(target, resources, slice_centers, sun_positions, horizon_functions):
     """Calculate visibility using pre-calculated sun positions and telescope-specific horizons."""
     visibility_intervals = {}
@@ -514,8 +543,14 @@ def calculate_visibility_with_precalc(target, resources, slice_centers, sun_posi
                                   frame='icrs')
             target_altaz = target_coord.transform_to(altaz_frame)
 
-            # Check horizon limits using telescope-specific horizon
-            horizon_alt = horizon_func(target_altaz.az.degree)
+            # COORDINATE SYSTEM CONVERSION
+            # Convert from astropy compass coordinates (0° = North)
+            # to astronomical coordinates (0° = South) used by horizon file
+            az_compass = target_altaz.az.degree
+            az_astronomical = (az_compass + 180) % 360
+
+            # Check horizon limits using converted coordinates
+            horizon_alt = horizon_func(az_astronomical)
             target_high = target_altaz.alt.degree > horizon_alt
 
             is_visible = sun_low & target_high
@@ -540,13 +575,12 @@ def calculate_visibility_with_precalc(target, resources, slice_centers, sun_posi
         if start_idx is not None:
             visible_intervals.append((
                 slice_centers[start_idx],
-                slice_centers[-1] + timedelta(seconds=TIME_SLICE)  # Assuming slice_size=300
+                slice_centers[-1] + timedelta(seconds=TIME_SLICE)
             ))
 
         visibility_intervals[resource_name] = visible_intervals
 
     return visibility_intervals
-
 
 def load_horizon_for_resource(resource_name, resource_info, config):
     """Load horizon data for a specific resource."""
