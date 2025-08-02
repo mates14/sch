@@ -191,6 +191,7 @@ def fetch_requests(conn, slice_size: int, telescope_id="None") -> List[Request]:
 
                 # Determine duration from sinfo if available
                 duration = None
+                mag=None
                 if sinfo:
                     # Parse sinfo for duration
                     duration_match = re.search(r'duration=(\d+)', sinfo)
@@ -215,12 +216,15 @@ def fetch_requests(conn, slice_size: int, telescope_id="None") -> List[Request]:
                         except (TypeError, ValueError):
                             duration = 900
 
-                print(name, mag, duration, reqtime)
+                #print(name, mag, duration, reqtime)
 
                 base_priority=row['tar_priority']
                 if base_priority is None:
                     print("Caught priority None!")
                     base_priority = 1
+
+                # round up duration to slice_size
+                duration = int(ceil(duration / slice_size) * slice_size)
 
                 request = Request(
                     id=tar_id,

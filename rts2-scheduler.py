@@ -2,7 +2,7 @@
 
 import enum
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import subprocess
 import sys
 import os
@@ -22,6 +22,8 @@ from scipy.interpolate import interp1d
 import functools
 import statistics
 import time
+
+TIME_SLICE = 300
 
 # Project's own imports:
 # 1. LCO legacy
@@ -127,7 +129,7 @@ def check_telescope_state(config):
                 day_state = state_value & 0x0f
 
                 # Telescope is available for scheduling if it's ON (2) and either DUSK (2) or NIGHT (3)
-                is_available = (on_state == 2 and day_state in [2, 3])
+                is_available = (on_state == 0 and day_state in [2, 3])
 
                 # Get human-readable state description
                 on_states = {0: "ON", 1: "STANDBY", 2: "UNKNOWN", 3: "OFF"}
@@ -186,6 +188,122 @@ def check_telescope_state_shell():
 
 
 def upload_schedule_to_rts2(schedule, config):
+    """
+    Upload schedule directly to PostgreSQL database for all telescopes.
+
+    Replaces the legacy RTS2 API/XMLRPC approach with direct database writes.
+    Writes to queue_id=2 (scheduler queue) in the queues_targets table.
+
+    Args:
+        schedule: Dictionary mapping telescope names to observations
+        config: Configuration object
+    """
+    from operator import attrgetter
+
+    logger.info("Starting direct database schedule upload")
+
+    # For each telescope in the schedule
+    for telescope, observations in schedule.items():
+        if not observations:  # Skip if no observations
+            logger.info(f"No observations for telescope {telescope}, skipping")
+            continue
+
+        # Get database config for this telescope
+        db_config = config.get_resource_db_config(telescope)
+        if not db_config:
+            logger.error(f"No database configuration found for telescope {telescope}")
+            continue
+
+        try:
+            # Connect to database
+            conn = psycopg2.connect(
+                host=db_config['host'],
+                database=db_config['dbname'],
+                user=db_config['user'],
+                password=db_config['password']
+            )
+            cursor = conn.cursor()
+
+            # Sort observations by start time
+            sorted_observations = sorted(observations, key=attrgetter('scheduled_start'))
+
+            # Clear existing scheduler queue (queue_id=2)
+            cursor.execute("DELETE FROM queues_targets WHERE queue_id = %s", (2,))
+            deleted_count = cursor.rowcount
+            if deleted_count > 0:
+                logger.info(f"Cleared {deleted_count} existing entries from scheduler queue for {telescope}")
+
+            # Get next available qid
+            cursor.execute("SELECT COALESCE(MAX(qid), 0) + 1 FROM queues_targets")
+            next_qid = cursor.fetchone()[0]
+
+            # Insert new observations
+            inserted_count = 0
+            for i, observation in enumerate(sorted_observations):
+                try:
+                    # Calculate start and end times
+                    start_time = observation.scheduled_start
+                    end_time = observation.scheduled_start + timedelta(seconds=observation.scheduled_quantum)
+
+                    # Ensure times are timezone-aware (convert to UTC if naive)
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    if end_time.tzinfo is None:
+                        end_time = end_time.replace(tzinfo=timezone.utc)
+
+                    # Insert into queues_targets table
+                    cursor.execute("""
+                        INSERT INTO queues_targets
+                        (qid, queue_id, tar_id, time_start, time_end, queue_order, repeat_n, repeat_separation)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        next_qid + i,           # qid: unique queue entry ID
+                        2,                      # queue_id: scheduler queue
+                        observation.request.id, # tar_id: target ID
+                        start_time,             # time_start: scheduled start
+                        end_time,               # time_end: scheduled end
+                        i,                      # queue_order: execution order
+                        -1,                     # repeat_n: no repeat (-1)
+                        None                    # repeat_separation: not used
+                    ))
+
+                    inserted_count += 1
+
+                    logger.info(f"Queued target {observation.request.id} ({observation.request.name}) "
+                               f"for {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC, "
+                               f"duration: {observation.scheduled_quantum}s")
+
+                except Exception as e:
+                    logger.error(f"Error inserting observation {i} for {telescope}: {e}")
+                    logger.error(f"Observation data: target_id={observation.request.id}, "
+                                f"start={observation.scheduled_start}, "
+                                f"duration={observation.scheduled_quantum}")
+
+            # Commit changes
+            conn.commit()
+
+            # Log summary
+            logger.info(f"Successfully uploaded {inserted_count} targets to scheduler queue for {telescope}")
+
+            # Show schedule summary
+            cursor.execute("""
+                SELECT MIN(time_start), MAX(time_end), COUNT(*)
+                FROM queues_targets WHERE queue_id = %s
+            """, (2,))
+            min_time, max_time, count = cursor.fetchone()
+            logger.info(f"Telescope {telescope}: {count} targets scheduled from {min_time} to {max_time}")
+
+            conn.close()
+
+        except psycopg2.Error as e:
+            logger.error(f"Database error uploading schedule for {telescope}: {e}")
+        except Exception as e:
+            logger.error(f"Error uploading schedule for {telescope}: {e}")
+
+    logger.info("Direct database schedule upload completed")
+
+
+def upload_schedule_to_rts2_old(schedule, config):
     """
     Upload schedule to RTS2 for all telescopes
 
@@ -422,7 +540,7 @@ def calculate_visibility_with_precalc(target, resources, slice_centers, sun_posi
         if start_idx is not None:
             visible_intervals.append((
                 slice_centers[start_idx],
-                slice_centers[-1] + timedelta(seconds=300)  # Assuming slice_size=300
+                slice_centers[-1] + timedelta(seconds=TIME_SLICE)  # Assuming slice_size=300
             ))
 
         visibility_intervals[resource_name] = visible_intervals
@@ -785,7 +903,7 @@ def prepare_scheduler_input(resources, config, slice_size, schedule_recorder):
 def run_scheduler(resources, config, slice_size=None):
     """Run the scheduler with the prepared inputs."""
     if slice_size is None:
-        slice_size = config.get_scheduler_param('slice_size', 300)
+        slice_size = config.get_scheduler_param('slice_size', TIME_SLICE)
 
     with timing("run_scheduler"):
         with timing("Schedule Recorder"):
