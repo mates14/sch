@@ -632,7 +632,9 @@ def prepare_resources(config: Config):
     for resource_id, resource_config in resources_config.items():
         resources[resource_id] = {
             'name': resource_config['name'],
-            'location': resource_config['location']
+            'location': resource_config['location'],
+            'horizon_file': resource_config.get('horizon_file'),
+            'min_altitude': resource_config.get('min_altitude')
         }
 
     # Convert to EarthLocation objects
@@ -645,7 +647,6 @@ def prepare_resources(config: Config):
         )
 
     return resources
-
 
 def fetch_requests_from_telescopes(resources, config, slice_size):
     """
@@ -848,7 +849,6 @@ def get_schedule_time_range(resources, slice_size, schedule_recorder):
 
     return start_time, end_time
 
-
 def prepare_scheduler_input(resources, config, slice_size, schedule_recorder):
     """
     Prepare input for the scheduler with support for multiple telescopes.
@@ -947,15 +947,23 @@ def run_scheduler(resources, config, slice_size=None):
 
         # Prepare scheduler input
         with timing("Prepare Scheduler Input"):
-            globally_possible_windows_dict, reservations, start_time = prepare_scheduler_input(
+            globally_possible_windows_dict, compound_reservations, start_time = prepare_scheduler_input(
                 resources, config, slice_size, schedule_recorder
             )
+
+        # Load horizon functions (needed for visualization)
+        with timing("Load Horizon Functions"):
+            horizon_functions = {}
+            for resource_name, resource_info in resources.items():
+                horizon_functions[resource_name] = load_horizon_for_resource(
+                    resource_name, resource_info, config
+                )
 
         # Initialize scheduler
         with timing("Initialize Scheduler"):
             scheduler = FullScheduler_ortoolkit(
                 kernel='CBC',
-                compound_reservation_list=reservations,
+                compound_reservation_list=compound_reservations,
                 globally_possible_windows_dict=globally_possible_windows_dict,
                 contractual_obligation_list=[],
                 slice_size_seconds=slice_size,
@@ -973,7 +981,8 @@ def run_scheduler(resources, config, slice_size=None):
         with timing("Save Schedule"):
             schedule_recorder.save_schedule(schedule, calculated_at=datetime.utcnow())
 
-        return schedule, schedule_recorder
+        # Return schedule, recorder, and visualization data
+        return schedule, schedule_recorder, horizon_functions, compound_reservations
 
 
 def main():
@@ -1004,7 +1013,7 @@ def main():
         logger.info(f"Prepared resources for {len(resources)} telescopes")
 
         # Run the scheduler
-        schedule, recorder = run_scheduler(resources, config)
+        schedule, recorder, horizon_functions, compound_reservations = run_scheduler(resources, config)
         logger.info("Scheduling completed")
 
         # Upload to RTS2 if schedule is not empty
@@ -1036,6 +1045,28 @@ def main():
                     logger.error(f"Error visualizing schedule: {e}")
             else:
                 logger.error(f"No database configuration found for resource {first_resource_name}")
+
+        with timing("Enhanced Schedule Visualization"):
+            if any(observations for observations in schedule.values()):
+                try:
+                    first_resource_name = next(iter(resources.keys()))
+                    db_config = config.get_resource_db_config(first_resource_name)
+
+                    if db_config:
+                        conn = connect_to_db(db_config)
+                        plot_dir = config.get_output_path('plot_dir', './plots')
+
+                        # Import and use the enhanced plotting
+                        from polar_altaz_plot import create_enhanced_plots
+                        create_enhanced_plots(schedule, resources, horizon_functions,
+                                            compound_reservations, plot_dir, conn)
+
+                        conn.close()
+                        logger.info("Enhanced schedule visualizations created")
+                    else:
+                        logger.error(f"No database configuration found for resource {first_resource_name}")
+                except Exception as e:
+                    logger.error(f"Error creating visualizations: {e}")
 
         logger.info("Scheduler execution completed successfully")
 
