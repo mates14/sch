@@ -32,7 +32,7 @@ from kernel.fullscheduler_cp_model import FullScheduler_ortoolkit
 from kernel.reservation import Reservation, CompoundReservation, OptimizationType
 # 2. Our own
 from request import Request, fetch_requests
-from sch_plot import visualize_schedule
+from sch_plot import visualize_schedule, create_enhanced_plots
 from recorder import ScheduleRecorder
 from config_loader import Config, ConfigurationError
 
@@ -1057,7 +1057,6 @@ def main():
                         plot_dir = config.get_output_path('plot_dir', './plots')
 
                         # Import and use the enhanced plotting
-                        from polar_altaz_plot import create_enhanced_plots
                         create_enhanced_plots(schedule, resources, horizon_functions,
                                             compound_reservations, plot_dir, conn)
 
