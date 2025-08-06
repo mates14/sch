@@ -12,6 +12,8 @@ import astropy.units as u
 from pathlib import Path
 import logging
 
+from contextlib import contextmanager
+
 logger = logging.getLogger(__name__)
 
 @contextmanager
