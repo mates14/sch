@@ -85,7 +85,7 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder):
     
     # Get global windows
     night_intervals = astro_utils.calculate_visibility(
-        None, resources, slice_centers, sun_positions, horizon_functions
+        None, resources, slice_centers, sun_positions, horizon_functions, slice_size
     )
     
     gpw_dict = {res: Intervals(windows) 
@@ -105,14 +105,14 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder):
     # Create compound reservations
     compound_reservations = _create_compound_reservations(
         all_requests, requests_by_resource, resources,
-        slice_centers, sun_positions, horizon_functions
+        slice_centers, sun_positions, horizon_functions, slice_size
     )
     
     return gpw_dict, compound_reservations, start_time
 
 
 def _create_compound_reservations(all_requests, requests_by_resource, resources,
-                                 slice_centers, sun_positions, horizon_functions):
+                                 slice_centers, sun_positions, horizon_functions, slice_size):
     """Create compound reservations for scheduling."""
     compound_reservations = []
     processed_ids = set()
@@ -123,7 +123,7 @@ def _create_compound_reservations(all_requests, requests_by_resource, resources,
         
         # Calculate visibility
         visibility = astro_utils.calculate_visibility(
-            request, resources, slice_centers, sun_positions, horizon_functions
+            request, resources, slice_centers, sun_positions, horizon_functions, slice_size
         )
         
         # Create windows

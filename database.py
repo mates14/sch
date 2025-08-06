@@ -15,6 +15,8 @@ import re
 from typing import List, Dict
 from request import Request
 
+from simbad_magnitude_query import get_magnitude
+
 logger = logging.getLogger(__name__)
 
 

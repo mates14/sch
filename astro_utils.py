@@ -68,7 +68,7 @@ def prepare_sun_positions(start_time, end_time, slice_size, resources):
 
 
 def calculate_visibility(target, resources, slice_centers, sun_positions, 
-                        horizon_functions):
+                        horizon_functions, slice_size):
     """Calculate target visibility using pre-calculated data."""
     visibility_intervals = {}
     
