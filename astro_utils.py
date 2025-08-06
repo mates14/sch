@@ -248,3 +248,19 @@ def find_next_sunrise(start_time, resources, slice_size=300):
     
     return max(sunrise_times) if sunrise_times else start_time + timedelta(hours=24)
 
+def hadec_to_altaz_vectorized(ha_array, dec_array, location):
+    """Vectorized conversion from HA/Dec to Alt/Az."""
+    time = Time('2024-10-21T12:20:00')
+    
+    # Create frames once
+    hadec_frame = HADec(obstime=time, location=location)
+    altaz_frame = AltAz(obstime=time, location=location)
+    
+    # Create coordinates for all points at once
+    coords = SkyCoord(ha=ha_array*u.deg, dec=dec_array*u.deg, frame=hadec_frame)
+    
+    # Transform all points at once
+    altaz = coords.transform_to(altaz_frame)
+    
+    return altaz.alt.degree, altaz.az.degree
+
