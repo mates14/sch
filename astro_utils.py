@@ -12,7 +12,9 @@ import astropy.units as u
 from pathlib import Path
 import logging
 
+# for timing
 from contextlib import contextmanager
+import time
 
 logger = logging.getLogger(__name__)
 
