@@ -14,6 +14,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+@contextmanager
+def timing(name):
+    start = time.time()
+    yield
+    end = time.time()
+    print(f"timing {name}: {(end - start):.1f}s")
+
 
 def ensure_earth_locations(resources):
     """Ensure all resources have earth_location objects."""
