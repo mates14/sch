@@ -115,43 +115,72 @@ def _bool_array_to_intervals(visible_array, slice_centers, slice_size):
     return intervals
 
 
-def load_horizon(file_path, location, min_altitude=20.0):
-    """Load horizon data and create interpolation function."""
-    file_path = Path(file_path)
-    if not file_path.exists():
-        logger.warning(f"Horizon file {file_path} not found, using flat {min_altitude}°")
-        return lambda az: np.full_like(az, min_altitude)
+def load_horizon(file_path: str, location: EarthLocation, min_altitude: float = 20.0) -> interp1d:
+    """
+    Load horizon data from a file and create an interpolation function.
     
-    az, alt = [], []
+    Args:
+        file_path: Path to horizon file
+        location: Observatory location
+        min_altitude: Minimum allowed altitude in degrees (default: 20.0)
+    
+    Returns:
+        Interpolation function that returns horizon altitude for given azimuth,
+        ensuring returned values are never below min_altitude
+    """
+    az = []
+    alt = []
+    ha = []
+    dec = []
     is_azalt = False
     
-    with open(file_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if line.startswith('AZ-ALT'):
-                is_azalt = True
-                continue
-            
-            values = line.split()
-            if is_azalt:
-                az.append(float(values[0]))
-                alt.append(max(float(values[1]), min_altitude))
-            else:
-                # HA-Dec format (legacy)
-                ha = float(values[0]) * 15  # hours to degrees
-                dec = float(values[1])
-                # Would need conversion here
+    # Read and classify points
+    with timing("file reading"):
+        with open(file_path, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('AZ-ALT'):
+                    is_azalt = True
+                    continue
+                    
+                values = line.split()
+                x = float(values[0])
+                y = float(values[1])
+                
+                if is_azalt:
+                    az.append(x)
+                    # Apply minimum altitude constraint
+                    alt.append(max(y, min_altitude))
+                else:
+                    ha.append(x * 15)  # Convert hours to degrees
+                    dec.append(y)
     
-    # Ensure circular
-    if az and az[0] != 360:
-        az.append(360)
-        alt.append(alt[0])
+    # Convert coordinates if needed
+    if not is_azalt:
+        with timing("hadec conversion batch"):
+            ha_array = np.array(ha)
+            dec_array = np.array(dec)
+            alt_array, az_array = hadec_to_altaz_vectorized(ha_array, dec_array, location)
+            az = list(az_array)
+            # Apply minimum altitude constraint
+            alt = list(np.maximum(alt_array, min_altitude))
     
-    return interp1d(np.array(az), np.array(alt), kind='linear', 
-                   fill_value='extrapolate')
-
+    # Ensure circular condition and convert to arrays
+    with timing("array conversion"):
+        if az[0] != 360:
+            az.append(360)
+            alt.append(alt[0])
+        az = np.array(az)
+        alt = np.array(alt)
+    
+    with timing("interpolation setup"):
+        result = interp1d(az, alt, kind='linear', fill_value='extrapolate')
+    
+    print(f"horizon: {len(az)} points, ", 'azalt' if is_azalt else 'hadec', " format")
+    print(f"minimum altitude set to {min_altitude} degrees")
+    return result
 
 def calculate_airmass(target, location, times):
     """Calculate airmass for target at given times and location.
