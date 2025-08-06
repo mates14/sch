@@ -15,17 +15,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def prepare_sun_positions(start_time, end_time, slice_size, resources):
-    """Pre-compute sun positions for all time slices."""
-    n_slices = int((end_time - start_time).total_seconds() / slice_size)
+def ensure_earth_locations(resources):
+    """Ensure all resources have earth_location objects."""
     
-    slice_centers = [
-        start_time + timedelta(seconds=slice_size * (i + 0.5))
-        for i in range(n_slices)
-    ]
-    time_points = Time(slice_centers)
-    
-    sun_positions = {}
     for name, info in resources.items():
         if 'earth_location' not in info:
             info['earth_location'] = EarthLocation(
@@ -33,17 +25,34 @@ def prepare_sun_positions(start_time, end_time, slice_size, resources):
                 lon=info['location']['longitude']*u.deg,
                 height=info['location']['elevation']*u.m
             )
-        
+    return resources
+
+
+def prepare_sun_positions(start_time, end_time, slice_size, resources):
+    """Pre-compute sun positions for all time slices."""
+    # Ensure earth locations exist
+    resources = ensure_earth_locations(resources)
+
+    n_slices = int((end_time - start_time).total_seconds() / slice_size)
+
+    slice_centers = [
+        start_time + timedelta(seconds=slice_size * (i + 0.5))
+        for i in range(n_slices)
+    ]
+    time_points = Time(slice_centers)
+
+    sun_positions = {}
+    for name, info in resources.items():
         observatory = info['earth_location']
         altaz_frame = AltAz(obstime=time_points, location=observatory)
         sun_altaz = get_sun(time_points).transform_to(altaz_frame)
-        
+
         sun_positions[name] = {
             'altitudes': sun_altaz.alt.deg,
             'is_night': sun_altaz.alt < -15*u.deg,
             'frame': altaz_frame
         }
-    
+
     return sun_positions, slice_centers
 
 
@@ -145,16 +154,27 @@ def load_horizon(file_path, location, min_altitude=20.0):
 
 
 def calculate_airmass(target, location, times):
-    """Calculate airmass for target at given times and location."""
+    """Calculate airmass for target at given times and location.
+    
+    Args:
+        target: Target object with tar_ra and tar_dec
+        location: Either an EarthLocation object or a dict with lat/lon/elevation
+        times: List of datetime objects
+    """
     if target.tar_ra is None or target.tar_dec is None:
         return np.ones(len(times))
     
     target_coord = SkyCoord(ra=target.tar_ra*u.deg, dec=target.tar_dec*u.deg)
-    earth_loc = EarthLocation(
-        lat=location['latitude']*u.deg,
-        lon=location['longitude']*u.deg,
-        height=location['elevation']*u.m
-    )
+    
+    # Handle both EarthLocation objects and location dicts
+    if isinstance(location, EarthLocation):
+        earth_loc = location
+    else:
+        earth_loc = EarthLocation(
+            lat=location['latitude']*u.deg,
+            lon=location['longitude']*u.deg,
+            height=location['elevation']*u.m
+        )
     
     astro_times = Time(times, format='datetime')
     altaz = target_coord.transform_to(AltAz(obstime=astro_times, location=earth_loc))

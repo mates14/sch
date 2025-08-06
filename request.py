@@ -12,6 +12,7 @@ from psycopg2.extras import DictCursor
 
 from kernel.reservation import OptimizationType
 from simbad_magnitude_query import get_magnitude
+from astro_utils import calculate_airmass
 
 logger = logging.getLogger(__name__)
 
@@ -83,23 +84,6 @@ class Request:
 
 #        return 1
         return priority_factor
-
-    def calculate_airmass(self, resource_name, resource_location, times):
-        """Calculate airmass for the target at given times and location."""
-        if self.tar_ra is None or self.tar_dec is None:
-            return np.ones(len(times))
-
-        target = SkyCoord(ra=self.tar_ra*u.deg, dec=self.tar_dec*u.deg)
-        location = EarthLocation(lat=resource_location['latitude']*u.deg,
-                                 lon=resource_location['longitude']*u.deg,
-                                 height=resource_location['elevation']*u.m)
-
-        astro_times = Time(times, format='datetime')
-
-        altaz = target.transform_to(AltAz(obstime=astro_times, location=location))
-
-        airmass = altaz.secz
-        return airmass.value
 
     def cache_airmass(self, resource_name, resource_location, times):
         """Cache airmass data for later optimization."""

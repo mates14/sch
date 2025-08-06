@@ -59,6 +59,10 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
 
 def _prepare_scheduler_input(resources, config, slice_size, recorder):
     """Prepare all inputs for the scheduler."""
+
+    # Ensure earth locations exist
+    resources = astro_utils.ensure_earth_locations(resources)
+
     # Load horizons
     horizon_functions = {}
     for name, info in resources.items():
