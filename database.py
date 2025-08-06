@@ -12,7 +12,8 @@ from math import ceil
 import logging
 import re
 
-from typing import List
+from typing import List, Dict
+from request import Request
 
 logger = logging.getLogger(__name__)
 
