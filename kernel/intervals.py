@@ -33,19 +33,19 @@ class Intervals(object):
     __version__ = '1.0.0'
 
     def __init__(self, timepoints=[], label=None, paranoid=False):
-        ''' 
+        '''
         timepoints: This can be a list of:
-        1. dicts, where each dict contains 2 keys: time and type. The type 
+        1. dicts, where each dict contains 2 keys: time and type. The type
         value must be 'start' or 'end', or
-        2. tuples, where each tuple contains 2 times, the first being the 
+        2. tuples, where each tuple contains 2 times, the first being the
         start time, which must be less than or equal to the second, the end
         time.
-        N intervals can be represented using 2N timepoint dicts or N interval 
+        N intervals can be represented using 2N timepoint dicts or N interval
         tuples.
-        The time value can be any class/type that supports comparison, 
-        addition and subtraction.  
+        The time value can be any class/type that supports comparison,
+        addition and subtraction.
         label (optional): one of the strings 'busy' or 'free'.
-        paranoid (optional): a boolean telling the class to normalize its 
+        paranoid (optional): a boolean telling the class to normalize its
         contents before every operation. The default is False, in which case
         they are normalized after every write operation.
         '''
@@ -90,7 +90,7 @@ class Intervals(object):
             elif isinstance(tp, tuple) and tp[0] <= tp[1]:
                 dict_init*=0
                 tuple_init*=1
-            else: 
+            else:
                 raise IntervalsConstructionError('bad list element')
         return (dict_init, tuple_init)
 
@@ -133,14 +133,14 @@ class Intervals(object):
 
     @staticmethod
     def sort_timepoints(tps):
-        ''' Sorts timepoints (list of dicts format) according to time. If 
-        a start & end have the same time, the end will appear before the 
+        ''' Sorts timepoints (list of dicts format) according to time. If
+        a start & end have the same time, the end will appear before the
         start.'''
         # sort ends before starts in the first pass (lexicographic)
         tps.sort(key=lambda x: x['type'])
-        # sort by time in the second pass (it's stable so it ensures 
+        # sort by time in the second pass (it's stable so it ensures
         # end before start if times are equal)
-        tps.sort(key=lambda x: x['time'])    
+        tps.sort(key=lambda x: x['time'])
 
     def sort(self):
         ''' Sorts timepoints according to time. If a start & end have the
@@ -149,7 +149,7 @@ class Intervals(object):
             Intervals.sort_timepoints(self.timepoints)
 
     def normalize(self, sort=False):
-        ''' Normalizes timepoints, meaning it optionally sorts them,  merges 
+        ''' Normalizes timepoints, meaning it optionally sorts them,  merges
         overlapping and adjacent intervals, and sanity checks the output.'''
         if self.timepoints:
             # Unless sort is set to True, assume the input is already sorted
@@ -248,13 +248,13 @@ class Intervals(object):
                 self.timepoints.extend(Intervals.convert_tuples_to_dicts(timepoints))
                 # sort and normalize
                 self.normalize(sort=True)
-            else: 
+            else:
                 raise IntervalsError('Mixed input to add')
         else:
             raise IntervalsError('Ill formatted input to add')
 
     def union(self, list_of_others):
-        ''' Returns a new Intervals object that is the union of self and 
+        ''' Returns a new Intervals object that is the union of self and
         list_of_others, a list of Intervals objects.'''
         merged_timepoints = list(self.timepoints)
         # merge all lists of timepoints
@@ -266,7 +266,7 @@ class Intervals(object):
     def get_total_time(self):
         ''' Returns the total amount of time in the intervals. When it
         operates on an empty Intervals it always returns 0, irrespective of
-        what type/class of the times are supposed to be, since the the 
+        what type/class of the times are supposed to be, since the the
         type/class cannot be ascertained.'''
         if self.paranoid: self.normalize()
         sum_val = 0
@@ -312,7 +312,7 @@ class Intervals(object):
         trimmed_tps = []
         sum_val     = 0
         # Here we have the same unavoidable problem as in get_total_time,
-        # namely we need to start summing with the right type/class, so we 
+        # namely we need to start summing with the right type/class, so we
         # have to check it explicitly.
         if self.timepoints[0]['type']=='start':
             start = self.timepoints[0]['time']
@@ -451,7 +451,7 @@ class Intervals(object):
             t[mykey]=1
         for t in self.timepoints:
             t[mykey]=2
-        
+
         merged_timepoints = list(self.timepoints)
         # merge the two lists
         merged_timepoints.extend(other.timepoints)
@@ -478,7 +478,7 @@ class Intervals(object):
             if mykey in tp:
                 del tp[mykey]
         # in case of label disagreement, use None
-        label = None 
+        label = None
         if self.label == other.label:
             label = self.label
         return Intervals(rc, label)

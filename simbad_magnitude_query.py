@@ -6,16 +6,16 @@ def get_magnitude(object_name):
     # Create a custom Simbad object with the 'flux(V)' field
     custom_simbad = Simbad()
     custom_simbad.add_votable_fields('flux(V)')
-    
+
     # Query Simbad
     result_table = custom_simbad.query_object(object_name)
-    
+
     if result_table is None:
         return None
-    
+
     # Extract the V magnitude
     v_mag = result_table['FLUX_V'][0]
-    
+
     return v_mag
 
 def main():

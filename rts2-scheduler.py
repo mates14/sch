@@ -14,7 +14,7 @@ from config_loader import Config, ConfigurationError
 from telescope_ops import check_telescope_state, upload_schedule_to_rts2
 from scheduler_core import run_scheduling_algorithm
 from database import get_connection
-from visualization import create_schedule_plot
+from visualization import create_schedule_plot, create_enhanced_plots
 from recorder import ScheduleRecorder
 
 # Configure logging
@@ -58,11 +58,14 @@ def main():
             available_telescopes = {name: True for name in config.get_resources()}
 
         # Run the scheduling algorithm
-        schedule = run_scheduling_algorithm(config, available_telescopes, recorder)
-
-        if not schedule or not any(schedule.values()):
+        result = run_scheduling_algorithm(config, available_telescopes, recorder)
+        if not result or not result.get('schedule') or not any(result['schedule'].values()):
             logger.warning("No observations scheduled")
             return 0
+
+        schedule = result['schedule']
+        horizon_functions = result['horizon_functions']
+        compound_reservations = result['compound_reservations']
 
         # Save the schedule
         recorder.save_schedule(schedule, calculated_at=datetime.utcnow())
@@ -87,6 +90,9 @@ def main():
             with get_connection(db_config) as conn:
                 create_schedule_plot(schedule, config.get_resources(),
                                    plot_file, conn)
+
+                create_enhanced_plots(schedule, config.get_resources(), horizon_functions,
+                                compound_reservations, plot_dir, conn)
                 logger.info(f"Visualization saved to {plot_file}")
 
         logger.info("Scheduler completed successfully")

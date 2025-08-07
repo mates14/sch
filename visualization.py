@@ -428,14 +428,14 @@ def visualize_schedule_with_polar(schedule, resources, horizon_functions, compou
     timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
 
     # Create time-based plot (existing functionality)
-    time_plot_file = os.path.join(output_dir, f"schedule-time-{timestamp}.png")
-    visualize_schedule(schedule, resources, time_plot_file, conn)
+    #time_plot_file = os.path.join(output_dir, f"schedule-time-{timestamp}.png")
+    #visualize_schedule(schedule, resources, time_plot_file, conn)
 
     # Create polar alt-az plot (new functionality)
     polar_plot_file = os.path.join(output_dir, f"schedule-polar-{timestamp}.png")
     plot_schedule_polar_altaz(schedule, resources, horizon_functions, compound_reservations, polar_plot_file, conn)
 
-    print(f"Time-based plot saved to {time_plot_file}")
+#    print(f"Time-based plot saved to {time_plot_file}")
     print(f"Polar alt-az plot saved to {polar_plot_file}")
 
 
