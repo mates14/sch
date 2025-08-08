@@ -106,7 +106,6 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
 
             all_requests.extend(requests)
             requests_by_resource[resource_name] = {r.id: r for r in requests}
-            schedule_start_times.append(schedule_start_time)
 
     # Determine actual start time based on database results
     if grb_detected:
