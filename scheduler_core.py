@@ -120,9 +120,9 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     logger.info(f"Scheduling window: {start_time} to {end_time}")
 
     # Pre-calculate sun positions
+    night_horizon = config.get_scheduler_param('night_horizon', -10.0)
     sun_positions, slice_centers = astro_utils.prepare_sun_positions(
-        start_time, end_time, slice_size, resources
-    )
+        start_time, end_time, slice_size, resources, night_horizon)
 
     # Get global windows
     night_intervals = astro_utils.calculate_visibility(

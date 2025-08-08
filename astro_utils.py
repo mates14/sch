@@ -39,7 +39,7 @@ def ensure_earth_locations(resources):
     return resources
 
 
-def prepare_sun_positions(start_time, end_time, slice_size, resources):
+def prepare_sun_positions(start_time, end_time, slice_size, resources, night_horizon=-10):
     """Pre-compute sun positions for all time slices."""
     # Ensure earth locations exist
     resources = ensure_earth_locations(resources)
@@ -60,7 +60,7 @@ def prepare_sun_positions(start_time, end_time, slice_size, resources):
 
         sun_positions[name] = {
             'altitudes': sun_altaz.alt.deg,
-            'is_night': sun_altaz.alt < -15*u.deg,
+            'is_night': sun_altaz.alt < night_horizon*u.deg,
             'frame': altaz_frame
         }
 
