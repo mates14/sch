@@ -78,7 +78,7 @@ def _get_centrald_state(rts2_config):
     return data.get('state')
 
 
-def upload_schedule_to_rts2(schedule, config):
+def upload_schedule_to_rts2(schedule, config, schedule_start_times):
     """Upload schedule to RTS2 via direct database writes."""
     logger.info("Uploading schedule to RTS2")
 
@@ -86,11 +86,14 @@ def upload_schedule_to_rts2(schedule, config):
         if not observations:
             continue
 
+        telescope_start_time = schedule_start_times.get(telescope, datetime.utcnow())
+
         _upload_telescope_schedule(telescope, observations,
-                                 config.get_resource_db_config(telescope))
+                                 config.get_resource_db_config(telescope), 
+                                 schedule_start_time)
 
 
-def _upload_telescope_schedule(telescope, observations, db_config):
+def _upload_telescope_schedule(telescope, observations, db_config, schedule_start_time):
     """Upload schedule for a single telescope."""
     if not db_config:
         logger.error(f"No DB config for {telescope}")
@@ -100,7 +103,13 @@ def _upload_telescope_schedule(telescope, observations, db_config):
         conn = psycopg2.connect(**db_config)
         cursor = conn.cursor()
 
-        # Clear existing scheduler queue
+        # Clear future entries, preserve currently executing one
+        cursor.execute("""
+            DELETE FROM queues_targets
+            WHERE queue_id = 2
+            AND (time_end <= NOW() OR time_start >= %s)
+
+        """, (schedule_start_time,))
         cursor.execute("DELETE FROM queues_targets WHERE queue_id = 2")
 
         # Get next qid
