@@ -85,12 +85,37 @@ class Request:
         return self._base_priority
 
     def get_priority_timescale(self):
-        """Get priority timescale from sinfo, default 30 days."""
-        return float(self.parsed_sinfo.get('pscale', 30))
+        """Get priority timescale from sinfo, default 1.0 day."""
+        return float(self.parsed_sinfo.get('pscale', 1.0))
 
     def has_and_type(self):
         """Check if this request specifies type=and."""
         return self.parsed_sinfo.get('type') == 'and'
+
+    def timescale_func(self, x):
+        """
+        Priority scaling function based on normalized time since last observation.
+
+        Args:
+            x: days_since_last_obs / timescale (normalized time)
+
+        Returns:
+            Priority multiplier (0.0 to 2.0)
+
+        Behavior:
+            - x < 1: Smooth rise from 0× to 2× priority (cosine curve)
+            - 1 ≤ x < 2: Smooth decline from 2× to 1× priority
+            - x ≥ 2: Constant 1× priority
+        """
+        if x < 1:
+            # Rise from 0 to 2 over first timescale: -cos(x*π) + 1
+            return -math.cos(x * math.pi) + 1
+        elif x < 2:
+            # Decline from 2 to 1 over second timescale: 1.5 - cos(x*π)/2
+            return 1.5 - math.cos(x * math.pi) / 2
+        else:
+            # Constant priority after 2 timescales
+            return 1.0
 
     def calculate_time_based_priority(self, start_time: datetime) -> float:
         """Calculate time-based priority factor using parameterized timescale."""
@@ -98,18 +123,13 @@ class Request:
             return 2.0  # Double priority if never observed
 
         time_since_last_obs = start_time - self.last_observation_time
-        days_since_last_obs = time_since_last_obs.total_seconds() / (24 * 3600)
+        days_since_last_obs = time_since_last_obs.total_seconds() / (24.0 * 3600)
 
         # Use parameterized timescale
         timescale = self.get_priority_timescale()
 
         # Adjust priority based on time since last observation
-        if days_since_last_obs < 1:
-            priority_factor = 2*days_since_last_obs - 0.5
-        elif days_since_last_obs < timescale:
-            priority_factor = 1 + ((days_since_last_obs-1) / timescale)
-        else:
-            priority_factor = 2
+        priority_factor = self.timescale_func(days_since_last_obs / timescale) 
 
         logger.debug(f"Request {self.id}: Base Priority={self._base_priority}, "
                      f"Days Since Last Obs={days_since_last_obs:.2f}, "
