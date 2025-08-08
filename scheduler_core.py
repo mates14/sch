@@ -165,7 +165,7 @@ def _get_horizon_functions(resources, config):
     return horizon_functions
 
 
-def _create_compound_reservations(all_requests, requests_by_resource, resources,
+def create_compound_reservations(all_requests, requests_by_resource, resources,
                                  slice_centers, sun_positions, horizon_functions, slice_size):
     """Create compound reservations for scheduling."""
     compound_reservations = []
