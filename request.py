@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import re
 import numpy as np
-from math import ceil
+from math import ceil, cos, pi
 from statistics import median
 from astropy.coordinates import SkyCoord, EarthLocation, AltAz, get_sun
 from astropy.time import Time
@@ -109,10 +109,10 @@ class Request:
         """
         if x < 1:
             # Rise from 0 to 2 over first timescale: -cos(x*π) + 1
-            return -math.cos(x * math.pi) + 1
+            return -cos(x * pi) + 1
         elif x < 2:
             # Decline from 2 to 1 over second timescale: 1.5 - cos(x*π)/2
-            return 1.5 - math.cos(x * math.pi) / 2
+            return 1.5 - cos(x * pi) / 2
         else:
             # Constant priority after 2 timescales
             return 1.0
