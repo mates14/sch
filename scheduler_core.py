@@ -228,7 +228,7 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
     logger.info(f"Created {len(compound_reservations)} compound reservations")
     return compound_reservations
 
-def _prepare_airmass_data(compound_reservations, resources, slice_size):
+def prepare_airmass_data(compound_reservations, resources, slice_size):
     """Calculate airmass data for reservations that need it (restored from original)."""
     from kernel.reservation import OptimizationType
 
