@@ -185,7 +185,7 @@ def get_current_executing_observation(conn):
     cursor = conn.cursor(cursor_factory=DictCursor)
     cursor.execute("""
         SELECT tar_id, time_end
-        FROM queue_targets
+        FROM queues_targets
         WHERE queue_id IN (1, 2)
         AND time_start < NOW()
         ORDER BY time_start DESC
@@ -428,7 +428,7 @@ def get_current_executing_observation(conn):
     cursor = conn.cursor(cursor_factory=DictCursor)
     cursor.execute("""
         SELECT tar_id, time_end
-        FROM queue_targets
+        FROM queues_targets
         WHERE queue_id IN (1, 2)
         AND time_start < NOW()
         ORDER BY time_start DESC
