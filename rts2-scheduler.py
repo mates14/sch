@@ -66,6 +66,7 @@ def main():
         schedule = result['schedule']
         horizon_functions = result['horizon_functions']
         compound_reservations = result['compound_reservations']
+        schedule_start_times = result['schedule_start_times'] 
 
         # Save the schedule
         recorder.save_schedule(schedule, calculated_at=datetime.utcnow())
@@ -73,7 +74,7 @@ def main():
 
         # Upload to RTS2
         if not args.no_upload:
-            upload_schedule_to_rts2(schedule, config)
+            upload_schedule_to_rts2(schedule, config, schedule_start_times)
             logger.info("Schedule uploaded to RTS2")
 
         # Create visualization

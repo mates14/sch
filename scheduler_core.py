@@ -32,7 +32,7 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
 
     # Prepare inputs
     logger.info("Preparing scheduler inputs")
-    gpw_dict, reservations, start_time = _prepare_scheduler_input(
+    gpw_dict, reservations, schedule_start_times_by_telescope = _prepare_scheduler_input(
         resources, config, slice_size, recorder, horizon_functions
     )
 
@@ -58,22 +58,57 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
 
     return {
         'schedule': schedule,
+        'schedule_start_times': schedule_start_times_by_telescope,
         'horizon_functions': horizon_functions,
         'compound_reservations': reservations
     }
 
 
-
 def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_functions):
     """Prepare all inputs for the scheduler."""
-
     # Ensure earth locations exist
     resources = astro_utils.ensure_earth_locations(resources)
 
-    # Determine time range
-    start_time = recorder.get_next_available_time()
-    end_time = astro_utils.find_next_sunrise(start_time, resources, slice_size)
+    # Calculate last noon for opportunity target exclusion
+    now = datetime.utcnow()
+    last_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    if now.hour < 12:
+        last_noon -= timedelta(days=1)
 
+    # MOVED UP: Fetch requests from all telescopes to determine start time
+    all_requests = []
+    requests_by_resource = {}
+    schedule_start_times_by_resource = {}
+    grb_detected = False
+
+    for resource_name in resources:
+        db_config = config.get_resource_db_config(resource_name)
+        with database.get_connection(db_config) as conn:
+            target_rows, schedule_start_time = database.fetch_requests(conn, resource_name, last_noon)
+
+            schedule_start_times_by_resource[resource_name] = schedule_start_time
+            # Convert rows to Request objects (existing conversion logic)
+            requests = [convert_row_to_request(row, resource_name) for row in target_rows]
+
+            # Check for GRBs
+            if any(row['type_id'] == 'G' for row in target_rows):
+                grb_detected = True
+                logger.warning(f"*** GRB targets found on {resource_name}! ***")
+
+            all_requests.extend(requests)
+            requests_by_resource[resource_name] = {r.id: r for r in requests}
+            schedule_start_times.append(schedule_start_time)
+
+    # Determine actual start time based on database results
+    if grb_detected:
+        start_time = datetime.utcnow()  # Immediate scheduling for GRBs
+        logger.warning("*** GRB MODE: Immediate scheduling ***")
+    else:
+        start_time = min(schedule_start_times_by_resource.values()) if schedule_start_times_by_resource else datetime.utcnow()
+        logger.info(f"Peace mode: scheduling starts at {start_time}")
+
+    # NOW continue with time-dependent calculations using the determined start_time
+    end_time = astro_utils.find_next_sunrise(start_time, resources, slice_size)
     logger.info(f"Scheduling window: {start_time} to {end_time}")
 
     # Pre-calculate sun positions
@@ -85,31 +120,19 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     night_intervals = astro_utils.calculate_visibility(
         None, resources, slice_centers, sun_positions, horizon_functions, slice_size
     )
-
     gpw_dict = {res: Intervals(windows)
                for res, windows in night_intervals.items()}
 
-    # Fetch requests from all telescopes
-    all_requests = []
-    requests_by_resource = {}
-
-    for resource_name in resources:
-        db_config = config.get_resource_db_config(resource_name)
-        with database.get_connection(db_config) as conn:
-            requests = database.fetch_requests(conn, slice_size, resource_name)
-            all_requests.extend(requests)
-            requests_by_resource[resource_name] = {r.id: r for r in requests}
-
-    # Create compound reservations
-    compound_reservations = _create_compound_reservations(
+    # Create compound reservations (now using already-fetched requests)
+    compound_reservations = create_compound_reservations(
         all_requests, requests_by_resource, resources,
         slice_centers, sun_positions, horizon_functions, slice_size
     )
 
     logger.info("Preparing airmass data for optimization")
-    _prepare_airmass_data(compound_reservations, resources, slice_size)
+    prepare_airmass_data(compound_reservations, resources, slice_size)
 
-    return gpw_dict, compound_reservations, start_time
+    return gpw_dict, compound_reservations, schedule_start_times_by_resource
 
 
 def _get_horizon_functions(resources, config):

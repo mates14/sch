@@ -113,33 +113,32 @@ def fetch_actual_observations(conn, start_time, end_time):
 
     return observations
 
+def fetch_requests(conn, telescope_name, last_noon):
+    """Fetch all requests excluding currently executing target"""
 
-def fetch_requests(conn, slice_size: int, telescope_id="None") -> List[Request]:
+    # Get currently executing observation info
+    current_obs = get_current_executing_observation(conn)
+    current_executing_tar_id = current_obs['tar_id'] if current_obs else None
+    schedule_start_time = current_obs['time_end'] if current_obs else datetime.utcnow()
+
+    cursor = conn.cursor(cursor_factory=DictCursor)
+
+    # Query for GRB targets (type_id='G') - these have priority
+    grb_query = """
+        SELECT t.tar_id, t.tar_ra, t.tar_dec, t.tar_priority, t.tar_name,
+               t.tar_comment, t.tar_bonus, t.tar_bonus_time, t.tar_next_observable,
+               t.tar_info, t.interruptible, t.tar_pm_ra, t.tar_pm_dec, t.tar_telescope_mode,
+               t.type_id,
+               (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) AS last_observation_time,
+               s.sinfo
+        FROM targets t
+        LEFT JOIN scheduling s ON t.tar_id = s.tar_id
+        WHERE
+        t.tar_enabled = TRUE
+        AND t.type_id = 'G'
     """
-    Fetch observation requests from the database and create Request objects.
-    Includes scheduling information from the scheduling table when available.
-    Now handles both normal targets (type_id='O') and GRB targets (type_id='G').
 
-    Args:
-        conn: Database connection
-        slice_size: Size of time slices in seconds
-        telescope_id: Optional identifier for which telescope the requests came from
-
-    Returns:
-        List of Request objects
-    """
-    requests = []
-    median_durations = calculate_median_durations(conn)
-    default_duration = 600  # 10 minutes as default if no historical data
-
-    # Calculate exclusion time (since last noon)
-    now = datetime.utcnow()
-    last_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    if now.hour < 12:
-        last_noon -= timedelta(days=1)
-
-    # Query for normal opportunity targets (type_id='O')
-    # Exclude targets observed since last noon
+    # Query for opportunity targets (type_id='O')
     opportunity_query = """
         SELECT t.tar_id, t.tar_ra, t.tar_dec, t.tar_priority, t.tar_name,
                t.tar_comment, t.tar_bonus, t.tar_bonus_time, t.tar_next_observable,
@@ -157,62 +156,42 @@ def fetch_requests(conn, slice_size: int, telescope_id="None") -> List[Request]:
             (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) IS NULL
             OR (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) < %s
         )
-        ORDER BY t.tar_priority DESC
     """
 
-    # Query for GRB targets (type_id='G') with grb table data
-    # GRBs are NOT subject to the "since last noon" exclusion
-    grb_query = """
-        SELECT t.tar_id, t.tar_ra, t.tar_dec, t.tar_priority, t.tar_name,
-               t.tar_comment, t.tar_bonus, t.tar_bonus_time, t.tar_next_observable,
-               t.tar_info, t.interruptible, t.tar_pm_ra, t.tar_pm_dec, t.tar_telescope_mode,
-               t.type_id,
-               (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) AS last_observation_time,
-               (SELECT MIN(obs_start) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) AS first_observation_time,
-               g.grb_date, g.grb_id,
-               s.sinfo
-        FROM targets t
-        LEFT JOIN scheduling s ON t.tar_id = s.tar_id
-        INNER JOIN grb g ON t.tar_id = g.tar_id
-        WHERE
-        t.tar_enabled = TRUE
-        AND t.tar_id BETWEEN 1000 AND 49999
-        AND t.type_id = 'G'
-        ORDER BY t.tar_priority DESC
-    """
+    # Add exclusion of currently executing target to both queries
+    grb_params = []
+    opp_params = [last_noon]
 
-    grb_count = 0
-    opportunity_count = 0
+    if current_executing_tar_id:
+        grb_query += " AND t.tar_id != %s"
+        opportunity_query += " AND t.tar_id != %s"
+        grb_params.append(current_executing_tar_id)
+        opp_params.append(current_executing_tar_id)
 
-    try:
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            # Process opportunity targets first (with last_noon exclusion)
-            cur.execute(opportunity_query, (last_noon,))
-            for row in cur:
-                request = _process_target_row(row, slice_size, median_durations, default_duration, False)
-                if request:
-                    requests.append(request)
-                    opportunity_count += 1
+    grb_query += " ORDER BY t.tar_priority DESC"
+    opportunity_query += " ORDER BY t.tar_priority DESC"
 
-            # Process GRB targets with time-based priority (no exclusion)
-            cur.execute(grb_query)
-            for row in cur:
-                request = _process_grb_row(row, slice_size, median_durations, default_duration)
-                if request:
-                    requests.append(request)
-                    grb_count += 1
+    # Execute queries
+    cursor.execute(grb_query, grb_params)
+    grb_targets = cursor.fetchall()
 
-    except Exception as e:
-        logger.error(f"Error fetching requests: {e}")
-        raise
+    cursor.execute(opportunity_query, opp_params)
+    opp_targets = cursor.fetchall()
 
-    logger.info(f"Fetched {len(requests)} requests: {grb_count} active GRB targets, {opportunity_count} opportunity targets")
-    logger.info(f"Excluded opportunity targets observed since: {last_noon}")
+    return grb_targets + opp_targets, schedule_start_time
 
-    if grb_count > 0:
-        logger.warning(f"*** {grb_count} active GRB target(s) found with time-scaled high priority! ***")
-
-    return requests
+def get_current_executing_observation(conn):
+    """Get the currently executing observation"""
+    cursor = conn.cursor(cursor_factory=DictCursor)
+    cursor.execute("""
+        SELECT tar_id, time_end
+        FROM queue_targets
+        WHERE queue_id IN (1, 2)
+        AND time_start < NOW()
+        ORDER BY time_start DESC
+        LIMIT 1
+    """)
+    return cursor.fetchone()
 
 
 def _process_target_row(row, slice_size, median_durations, default_duration, telescope_id, is_grb=False):
@@ -444,3 +423,37 @@ def calculate_median_durations(conn) -> Dict[int, float]:
         raise
 
 
+def get_current_executing_observation(conn):
+    """Get the currently executing observation"""
+    cursor = conn.cursor(cursor_factory=DictCursor)
+    cursor.execute("""
+        SELECT tar_id, time_end
+        FROM queue_targets
+        WHERE queue_id IN (1, 2)
+        AND time_start < NOW()
+        ORDER BY time_start DESC
+        LIMIT 1
+    """)
+    return cursor.fetchone()  # Returns {'tar_id': 1008, 'time_end': datetime(...)} or None
+
+
+def get_schedule_start_info(conn):
+    """Get when to start scheduling and what target to exclude"""
+    current = get_current_executing_observation(conn)
+
+    if current:
+        return current['time_end'], current['tar_id']
+    else:
+        # Nothing currently executing
+        return datetime.utcnow(), None
+
+
+def has_grb_targets(conn):
+    """Check if there are schedulable GRB targets"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) FROM targets
+        WHERE type_id = 'G' AND enabled = true
+        -- Add any other GRB-ready conditions
+    """)
+    return cursor.fetchone()[0] > 0
