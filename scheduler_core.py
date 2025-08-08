@@ -88,7 +88,16 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
 
             schedule_start_times_by_resource[resource_name] = schedule_start_time
             # Convert rows to Request objects (existing conversion logic)
-            requests = [convert_row_to_request(row, resource_name) for row in target_rows]
+            requests = []
+            median_durations = database.calculate_median_durations(conn)
+            default_duration = 600
+
+            for row in target_rows:
+                is_grb = (row['type_id'] == 'G')
+                request = database._process_target_row(row, slice_size, median_durations, default_duration, resource_name, is_grb)
+                if request:
+                    requests.append(request)
+            # requests = [convert_row_to_request(row, resource_name) for row in target_rows]
 
             # Check for GRBs
             if any(row['type_id'] == 'G' for row in target_rows):
