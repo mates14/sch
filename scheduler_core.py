@@ -32,7 +32,7 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
 
     # Prepare inputs
     logger.info("Preparing scheduler inputs")
-    gpw_dict, reservations, schedule_start_times_by_telescope = _prepare_scheduler_input(
+    gpw_dict, reservations, schedule_start_times_by_telescope, celestial_data, slice_centers = _prepare_scheduler_input(
         resources, config, slice_size, recorder, horizon_functions
     )
 
@@ -68,7 +68,9 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
         'schedule': schedule,
         'schedule_start_times': schedule_start_times_by_telescope,
         'horizon_functions': horizon_functions,
-        'compound_reservations': reservations
+        'compound_reservations': reservations,
+        'celestial_data': celestial_data,
+        'slice_centers': slice_centers
     }
 
 
@@ -183,7 +185,7 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
                              config.get_scheduler_param('moon_min_distance', 10.0),
                              config.get_scheduler_param('moon_penalty_range', 30.0))
 
-    return gpw_dict, compound_reservations, schedule_start_times_by_resource
+    return gpw_dict, compound_reservations, schedule_start_times_by_resource, celestial_data, slice_centers
 
 
 def _get_horizon_functions(resources, config):
