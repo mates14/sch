@@ -39,7 +39,9 @@ class CPScheduler(BaseScheduler):
     """
 
     def __init__(self, compound_reservation_list, globally_possible_windows_dict,
-                 slice_size_seconds, timelimit=180, mip_gap=0.05):
+                 slice_size_seconds, timelimit=180, mip_gap=0.05,
+                 celestial_data=None, slice_centers=None,
+                 moon_min_distance=10.0, moon_penalty_range=30.0):
         """
         Initialize the CP scheduler.
 
@@ -49,6 +51,10 @@ class CPScheduler(BaseScheduler):
             slice_size_seconds: Time slice size in seconds
             timelimit: Maximum solver time in seconds
             mip_gap: Relative optimality gap
+            celestial_data: Pre-calculated sun and moon positions
+            slice_centers: Time points for celestial calculations
+            moon_min_distance: Minimum distance from moon (degrees)
+            moon_penalty_range: Distance where moon penalties apply (degrees)
         """
         super().__init__(
             compound_reservation_list,
@@ -59,6 +65,12 @@ class CPScheduler(BaseScheduler):
         self.slice_size_seconds = slice_size_seconds
         self.timelimit = timelimit
         self.mip_gap = mip_gap
+
+        # Moon penalty parameters
+        self.celestial_data = celestial_data
+        self.slice_centers = slice_centers
+        self.moon_min_distance = moon_min_distance
+        self.moon_penalty_range = moon_penalty_range
 
         # Data structures for the solver
         self.Yik = []  # Maps idx -> [resID, window_idx, priority, resource]
@@ -364,7 +376,38 @@ class CPScheduler(BaseScheduler):
                 possible_start.internal_start
             )
 
+            # Apply moon penalty (cached lookup, very fast)
+            moon_penalty = self._get_moon_penalty(
+                reservation.request, possible_start.resource,
+                possible_start.internal_start, reservation.duration
+            )
+            base_priority *= moon_penalty
+
         return base_priority
+
+    def _get_moon_penalty(self, request, resource, start_time, duration):
+        """Get moon penalty coefficient for optimization."""
+        if not hasattr(request, 'moon_penalty_data'):
+            return 1.0
+
+        if resource not in request.moon_penalty_data:
+            return 1.0
+
+        data = request.moon_penalty_data[resource]
+        if not data['times']:
+            return 1.0
+
+        mid_time = start_time + timedelta(seconds=duration/2)
+
+        # Find penalty for observation midpoint (same logic as airmass)
+        times = data['times']
+        penalties = data['penalties']
+
+        # Find closest time
+        time_diffs = [abs((t - mid_time).total_seconds()) for t in times]
+        closest_idx = time_diffs.index(min(time_diffs))
+
+        return penalties[closest_idx]
 
     def _get_airmass_coefficient(self, request, resource, start_time, duration):
         """Get airmass coefficient for optimization."""

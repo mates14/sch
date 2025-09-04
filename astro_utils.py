@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
 from astropy.time import Time
-from astropy.coordinates import SkyCoord, EarthLocation, AltAz, get_sun, HADec
+from astropy.coordinates import SkyCoord, EarthLocation, AltAz, get_sun, get_moon, HADec
 import astropy.units as u
 from pathlib import Path
 import logging
@@ -40,7 +40,20 @@ def ensure_earth_locations(resources):
 
 
 def prepare_sun_positions(start_time, end_time, slice_size, resources, night_horizon=-10):
-    """Pre-compute sun positions for all time slices."""
+    """Pre-compute sun positions for all time slices. (Legacy wrapper)"""
+    celestial_data, slice_centers = prepare_celestial_positions(start_time, end_time, slice_size, resources, night_horizon)
+    # Extract just sun data for backward compatibility
+    sun_positions = {}
+    for name in celestial_data:
+        sun_positions[name] = {
+            'altitudes': celestial_data[name]['sun']['altitudes'],
+            'is_night': celestial_data[name]['sun']['is_night'],
+            'frame': celestial_data[name]['frame']
+        }
+    return sun_positions, slice_centers
+
+def prepare_celestial_positions(start_time, end_time, slice_size, resources, night_horizon=-10):
+    """Pre-compute sun and moon positions for all time slices."""
     # Ensure earth locations exist
     resources = ensure_earth_locations(resources)
 
@@ -52,19 +65,81 @@ def prepare_sun_positions(start_time, end_time, slice_size, resources, night_hor
     ]
     time_points = Time(slice_centers)
 
-    sun_positions = {}
+    celestial_data = {}
     for name, info in resources.items():
         observatory = info['earth_location']
         altaz_frame = AltAz(obstime=time_points, location=observatory)
+
+        # Calculate sun positions
         sun_altaz = get_sun(time_points).transform_to(altaz_frame)
 
-        sun_positions[name] = {
-            'altitudes': sun_altaz.alt.deg,
-            'is_night': sun_altaz.alt < night_horizon*u.deg,
+        # Calculate moon positions
+        moon_altaz = get_moon(time_points).transform_to(altaz_frame)
+
+        celestial_data[name] = {
+            'sun': {
+                'altitudes': sun_altaz.alt.deg,
+                'is_night': sun_altaz.alt < night_horizon*u.deg,
+                'coordinates': sun_altaz
+            },
+            'moon': {
+                'altitudes': moon_altaz.alt.deg,
+                'azimuths': moon_altaz.az.deg,
+                'coordinates': moon_altaz,
+                'is_up': moon_altaz.alt > 0*u.deg
+            },
             'frame': altaz_frame
         }
 
-    return sun_positions, slice_centers
+    return celestial_data, slice_centers
+
+
+def calculate_moon_penalty(target_coord, celestial_data, resource_name, slice_idx,
+                          min_distance=10.0, penalty_range=30.0):
+    """
+    Calculate moon distance penalty for target priority.
+
+    Args:
+        target_coord: Target SkyCoord
+        celestial_data: Full celestial data dict
+        resource_name: Telescope name
+        slice_idx: Time slice index
+        min_distance: Hard limit - no observations within this distance (degrees)
+        penalty_range: Distance where penalties apply (degrees)
+
+    Returns:
+        penalty_factor: Multiplier for priority (0 = blocked, 1 = no penalty)
+    """
+    moon_data = celestial_data[resource_name]['moon']
+
+    # Skip if moon is below horizon
+    if not moon_data['is_up'][slice_idx]:
+        return 1.0
+
+    # Get moon coordinates for this time slice
+    moon_altaz = moon_data['coordinates'][slice_idx]
+
+    # Transform target to same frame
+    altaz_frame = celestial_data[resource_name]['frame'][slice_idx]
+    target_altaz = target_coord.transform_to(altaz_frame)
+
+    # Calculate angular separation
+    moon_distance = target_altaz.separation(moon_altaz).deg
+
+    # Hard block within minimum distance
+    if moon_distance < min_distance:
+        return 0.0  # Completely blocked
+
+    # Gradual penalty within penalty range
+    if moon_distance < penalty_range:
+        # Linear penalty from 0 to 1 as distance increases from min to penalty_range
+        penalty_factor = (moon_distance - min_distance) / (penalty_range - min_distance)
+        # Square it for stronger penalty closer to moon
+        penalty_factor = penalty_factor ** 2
+        return max(0.01, penalty_factor)  # Minimum 1% priority to avoid division issues
+
+    # No penalty beyond penalty range
+    return 1.0
 
 
 def calculate_visibility(target, resources, slice_centers, sun_positions,

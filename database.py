@@ -187,7 +187,8 @@ def get_current_executing_observation(conn):
         SELECT tar_id, time_end
         FROM queues_targets
         WHERE queue_id IN (1, 2)
-        AND time_start < NOW()
+        AND (time_start IS NULL OR time_start <= NOW())
+        AND (time_end IS NULL OR time_end > NOW())
         ORDER BY time_start DESC
         LIMIT 1
     """)
@@ -430,7 +431,8 @@ def get_current_executing_observation(conn):
         SELECT tar_id, time_end
         FROM queues_targets
         WHERE queue_id IN (1, 2)
-        AND time_start < NOW()
+        AND (time_start IS NULL OR time_start <= NOW())
+        AND (time_end IS NULL OR time_end > NOW())
         ORDER BY time_start DESC
         LIMIT 1
     """)

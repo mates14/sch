@@ -62,6 +62,7 @@ class Request:
         self.pm_dec = pm_dec
         self.last_observation_time = last_observation_time
         self.airmass_data = {}
+        self.moon_penalty_data = {}  # Cache moon penalties like airmass
         self.telescope_name = telescope_name
 
         # Parse sinfo for this telescope
@@ -129,7 +130,7 @@ class Request:
         timescale = self.get_priority_timescale()
 
         # Adjust priority based on time since last observation
-        priority_factor = self.timescale_func(days_since_last_obs / timescale) 
+        priority_factor = self.timescale_func(days_since_last_obs / timescale)
 
         logger.debug(f"Request {self.id}: Base Priority={self._base_priority}, "
                      f"Days Since Last Obs={days_since_last_obs:.2f}, "
@@ -146,4 +147,38 @@ class Request:
     def get_airmasses_within_kernel_windows(self, resource_name):
         """Get cached airmass data for the given resource."""
         return self.airmass_data.get(resource_name, {'times': [], 'airmasses': []})
+
+    def cache_moon_penalties(self, resource_name, celestial_data, slice_centers, times,
+                           min_distance=10.0, penalty_range=30.0):
+        """Cache moon penalty data for later optimization."""
+        from astro_utils import calculate_moon_penalty
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+
+        # Create target coordinate
+        target_coord = SkyCoord(ra=self.tar_ra*u.deg, dec=self.tar_dec*u.deg)
+
+        penalties = []
+        for time in times:
+            # Find corresponding slice index
+            slice_idx = None
+            for i, slice_center in enumerate(slice_centers):
+                if abs((time - slice_center).total_seconds()) < 300:  # Within slice_size tolerance
+                    slice_idx = i
+                    break
+
+            if slice_idx is not None:
+                penalty = calculate_moon_penalty(
+                    target_coord, celestial_data, resource_name, slice_idx,
+                    min_distance, penalty_range
+                )
+                penalties.append(penalty)
+            else:
+                penalties.append(1.0)  # No penalty if time not found
+
+        self.moon_penalty_data[resource_name] = {'times': times, 'penalties': penalties}
+
+    def get_moon_penalties(self, resource_name):
+        """Get cached moon penalty data for the given resource."""
+        return self.moon_penalty_data.get(resource_name, {'times': [], 'penalties': []})
 
