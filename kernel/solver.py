@@ -158,7 +158,7 @@ class CPScheduler(BaseScheduler):
                 else:
                     base_priority = r.priority + (10 / (w_idx + 1.0))
 
-                base_priority /= r.duration  # fair handling of long requests
+                base_priority *= r.duration  # fair handling of long requests
 
                 if r.request:
                     final_priority = base_priority * r.request.calculate_time_based_priority(ps.internal_start)
@@ -357,7 +357,7 @@ class CPScheduler(BaseScheduler):
                 base_priority += 10 / (window_idx + 1.0)
 
             # Fair handling of long requests
-            base_priority /= reservation.duration
+            base_priority *= reservation.duration
 
             # Apply time-based priority
             base_priority *= reservation.request.calculate_time_based_priority(
