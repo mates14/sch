@@ -380,12 +380,11 @@ def find_next_sunrise(start_time, resources, slice_size=300):
             if np.any(sun_up):
                 sunrise_idx = np.where(sun_up)[0][0]
                 sunrise = times[sunrise_idx].datetime
-                # Ensure timezone consistency
-                if sunrise.tzinfo is None and start_time.tzinfo is not None:
-                    from datetime import timezone
-                    sunrise = sunrise.replace(tzinfo=timezone.utc)
-                elif sunrise.tzinfo is not None and start_time.tzinfo is None:
-                    start_time = start_time.replace(tzinfo=timezone.utc)
+                # Strip timezone info to work in UTC-naive environment
+                if sunrise.tzinfo is not None:
+                    sunrise = sunrise.replace(tzinfo=None)
+                if start_time.tzinfo is not None:
+                    start_time = start_time.replace(tzinfo=None)
                 if sunrise > start_time:
                     sunrise_times.append(sunrise)
                     break
