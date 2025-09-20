@@ -119,7 +119,15 @@ def fetch_requests(conn, telescope_name, last_noon):
     # Get currently executing observation info
     current_obs = get_current_executing_observation(conn)
     current_executing_tar_id = current_obs['tar_id'] if current_obs else None
-    schedule_start_time = current_obs['time_end'] if current_obs else datetime.utcnow()
+    if current_obs and current_obs['time_end']:
+        schedule_start_time = current_obs['time_end']
+        # Ensure timezone consistency - if database time has no timezone, assume UTC
+        if schedule_start_time.tzinfo is None:
+            from datetime import timezone
+            schedule_start_time = schedule_start_time.replace(tzinfo=timezone.utc)
+    else:
+        from datetime import timezone
+        schedule_start_time = datetime.utcnow().replace(tzinfo=timezone.utc)
 
     cursor = conn.cursor(cursor_factory=DictCursor)
 

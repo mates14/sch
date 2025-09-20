@@ -140,10 +140,21 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
 
     # Determine actual start time based on database results
     if grb_detected:
-        start_time = datetime.utcnow()  # Immediate scheduling for GRBs
+        start_time = datetime.utcnow().replace(tzinfo=timezone.utc)  # Immediate scheduling for GRBs
         logger.warning("*** GRB MODE: Immediate scheduling ***")
     else:
-        start_time = min(schedule_start_times_by_resource.values()) if schedule_start_times_by_resource else datetime.utcnow()
+        if schedule_start_times_by_resource:
+            # Ensure all times are timezone-aware by converting to UTC if needed
+            normalized_times = []
+            for time_val in schedule_start_times_by_resource.values():
+                if time_val.tzinfo is None:
+                    # Assume UTC if no timezone info
+                    normalized_times.append(time_val.replace(tzinfo=timezone.utc))
+                else:
+                    normalized_times.append(time_val)
+            start_time = min(normalized_times)
+        else:
+            start_time = datetime.utcnow().replace(tzinfo=timezone.utc)
         logger.info(f"Peace mode: scheduling starts at {start_time}")
 
     # NOW continue with time-dependent calculations using the determined start_time
