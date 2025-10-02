@@ -483,7 +483,17 @@ def get_manual_schedule_intervals(conn, start_time, end_time):
 
     intervals = []
     for row in cursor.fetchall():
-        intervals.append((row['time_start'], row['time_end']))
+        # Strip timezone info since everything is in UTC anyway
+        start_time = row['time_start']
+        end_time = row['time_end']
+        
+        if start_time.tzinfo is not None:
+            start_time = start_time.replace(tzinfo=None)
+            
+        if end_time.tzinfo is not None:
+            end_time = end_time.replace(tzinfo=None)
+            
+        intervals.append((start_time, end_time))
 
     logger.info(f"Found {len(intervals)} manual schedule intervals overlapping with planning period")
     return intervals
