@@ -465,3 +465,25 @@ def has_grb_targets(conn):
         -- Add any other GRB-ready conditions
     """)
     return cursor.fetchone()[0] > 0
+
+
+def get_manual_schedule_intervals(conn, start_time, end_time):
+    """Get manual schedule intervals (queue_id == 1) that overlap with the planning period."""
+    cursor = conn.cursor(cursor_factory=DictCursor)
+    cursor.execute("""
+        SELECT time_start, time_end
+        FROM queues_targets
+        WHERE queue_id = 1
+        AND time_start IS NOT NULL
+        AND time_end IS NOT NULL
+        AND time_start < %s
+        AND time_end > %s
+        ORDER BY time_start
+    """, (end_time, start_time))
+
+    intervals = []
+    for row in cursor.fetchall():
+        intervals.append((row['time_start'], row['time_end']))
+
+    logger.info(f"Found {len(intervals)} manual schedule intervals overlapping with planning period")
+    return intervals

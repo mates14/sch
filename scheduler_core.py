@@ -182,6 +182,18 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     gpw_dict = {res: Intervals(windows)
                for res, windows in night_intervals.items()}
 
+    # Exclude manual schedule intervals (queue_id == 1) from globally possible windows
+    for resource_name in resources:
+        db_config = config.get_resource_db_config(resource_name)
+        with database.get_connection(db_config) as conn:
+            manual_intervals = database.get_manual_schedule_intervals(conn, start_time, end_time)
+
+            if manual_intervals:
+                # Convert manual intervals to Intervals object and subtract from global windows
+                manual_intervals_obj = Intervals(manual_intervals)
+                gpw_dict[resource_name] = gpw_dict[resource_name].subtract(manual_intervals_obj)
+                logger.info(f"Excluded {len(manual_intervals)} manual schedule intervals from {resource_name} global windows")
+
     # Create compound reservations (now using already-fetched requests)
     compound_reservations = create_compound_reservations(
         all_requests, requests_by_resource, resources,
