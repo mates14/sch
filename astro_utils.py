@@ -188,6 +188,67 @@ def calculate_visibility(target, resources, slice_centers, sun_positions,
     return visibility_intervals
 
 
+def filter_meridian_crossing_windows(target, windows, resource_info):
+    """
+    Remove visibility windows that cross the meridian (HA=0) for German mounts.
+
+    Exception: GRBs are never filtered - urgency outweighs meridian flip inconvenience.
+
+    Args:
+        target: Target object with tar_ra and tar_dec
+        windows: List of (start_time, end_time) tuples
+        resource_info: Resource dict with 'earth_location' and optionally 'mount_type'
+
+    Returns:
+        Filtered list of windows that don't cross the meridian
+    """
+    # Never filter GRBs - too urgent to miss
+    if target and hasattr(target, 'type_id') and target.type_id == 'G':
+        return windows
+
+    # Only filter for German mounts
+    mount_type = resource_info.get('mount_type', 'fork')
+    if mount_type != 'german':
+        return windows
+
+    if not windows or target is None:
+        return windows
+
+    safe_windows = []
+    observatory = resource_info['earth_location']
+    target_coord = SkyCoord(ra=target.tar_ra*u.degree, dec=target.tar_dec*u.degree, frame='icrs')
+
+    for start_time, end_time in windows:
+        # Check HA at start and end of window
+        start_astropy_time = Time(start_time)
+        end_astropy_time = Time(end_time)
+
+        # Calculate hour angle at both endpoints
+        # HA = LST - RA
+        start_lst = start_astropy_time.sidereal_time('apparent', longitude=observatory.lon)
+        end_lst = end_astropy_time.sidereal_time('apparent', longitude=observatory.lon)
+
+        start_ha = (start_lst - target_coord.ra).wrap_at(180*u.deg).degree
+        end_ha = (end_lst - target_coord.ra).wrap_at(180*u.deg).degree
+
+        # Check if window crosses HA=0 (meridian)
+        # Crossing happens if: start_ha and end_ha have different signs AND they're not wrapping around at ±180°
+        crosses_meridian = False
+
+        if start_ha * end_ha < 0:  # Different signs
+            # Check if it's a real crossing (near 0°) or just wrapping (near ±180°)
+            if abs(start_ha) < 90 and abs(end_ha) < 90:
+                crosses_meridian = True
+
+        if not crosses_meridian:
+            safe_windows.append((start_time, end_time))
+        else:
+            logger.info(f"Filtered out window crossing meridian: {start_time} to {end_time} "
+                       f"(HA {start_ha:.1f}° → {end_ha:.1f}°)")
+
+    return safe_windows
+
+
 def _bool_array_to_intervals(visible_array, slice_centers, slice_size):
     """Convert boolean visibility array to time intervals."""
     intervals = []

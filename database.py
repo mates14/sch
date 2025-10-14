@@ -222,8 +222,9 @@ def _process_target_row(row, slice_size, median_durations, default_duration, tel
             logger.debug(f"Using sinfo duration {duration}s for target {row['tar_id']}")
     else:
         if is_grb:
-            # GRB targets: use a standard duration (1 hour)
-            duration = 3600  # 1 hour for GRB follow-up
+            # GRB targets: use a standard duration (2 hours)
+            # Longer duration allows time for human operators to wake up and respond
+            duration = 7200  # 2 hours for GRB follow-up
             mag = None
         else:
             # Normal targets: calculate from magnitude

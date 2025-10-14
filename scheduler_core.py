@@ -290,6 +290,12 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
             request, resources, slice_centers, sun_positions, horizon_functions, slice_size
         )
 
+        # Filter out meridian-crossing windows for German mounts
+        for res_name in list(visibility.keys()):
+            visibility[res_name] = astro_utils.filter_meridian_crossing_windows(
+                request, visibility[res_name], resources[res_name]
+            )
+
         # Create windows
         possible_windows = {}
         for res_name, windows in visibility.items():

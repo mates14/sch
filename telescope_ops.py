@@ -8,7 +8,7 @@ import http.client
 import base64
 import json
 import psycopg2
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from operator import attrgetter
 
 logger = logging.getLogger(__name__)
@@ -89,8 +89,8 @@ def upload_schedule_to_rts2(schedule, config, schedule_start_times):
         telescope_start_time = schedule_start_times.get(telescope, datetime.utcnow())
 
         _upload_telescope_schedule(telescope, observations,
-                                 config.get_resource_db_config(telescope), 
-                                 schedule_start_time)
+                                 config.get_resource_db_config(telescope),
+                                 telescope_start_time)
 
 
 def _upload_telescope_schedule(telescope, observations, db_config, schedule_start_time):
