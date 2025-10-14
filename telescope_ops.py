@@ -104,13 +104,13 @@ def _upload_telescope_schedule(telescope, observations, db_config, schedule_star
         cursor = conn.cursor()
 
         # Clear future entries, preserve currently executing one
+        # Delete entries that have already ended OR haven't started yet
+        # This preserves any observation currently in progress
         cursor.execute("""
             DELETE FROM queues_targets
             WHERE queue_id = 2
             AND (time_end <= NOW() OR time_start >= %s)
-
         """, (schedule_start_time,))
-        cursor.execute("DELETE FROM queues_targets WHERE queue_id = 2")
 
         # Get next qid
         cursor.execute("SELECT COALESCE(MAX(qid), 0) + 1 FROM queues_targets")

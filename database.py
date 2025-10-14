@@ -135,9 +135,11 @@ def fetch_requests(conn, telescope_name, last_noon):
                t.tar_comment, t.tar_bonus, t.tar_bonus_time, t.tar_next_observable,
                t.tar_info, t.interruptible, t.tar_pm_ra, t.tar_pm_dec, t.tar_telescope_mode,
                t.type_id,
+               g.grb_date, g.grb_id,
                (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) AS last_observation_time,
                s.sinfo
         FROM targets t
+        LEFT JOIN grb g ON t.tar_id = g.tar_id
         LEFT JOIN scheduling s ON t.tar_id = s.tar_id
         WHERE
         t.tar_enabled = TRUE
@@ -202,7 +204,7 @@ def get_current_executing_observation(conn):
 
 
 def _process_target_row(row, slice_size, median_durations, default_duration, telescope_id, is_grb=False):
-    """Process a single target row (common logic for both O and G targets)"""
+    """Process a single target row (common logic for all target types)"""
     tar_id = row['tar_id']
     tar_ra = row['tar_ra']
     type_id = row['type_id']
@@ -220,8 +222,8 @@ def _process_target_row(row, slice_size, median_durations, default_duration, tel
             logger.debug(f"Using sinfo duration {duration}s for target {row['tar_id']}")
     else:
         if is_grb:
-            # GRB targets: use a standard duration (30 minutes)
-            duration = 3600  # 30 minutes for GRB follow-up
+            # GRB targets: use a standard duration (1 hour)
+            duration = 3600  # 1 hour for GRB follow-up
             mag = None
         else:
             # Normal targets: calculate from magnitude
@@ -248,6 +250,13 @@ def _process_target_row(row, slice_size, median_durations, default_duration, tel
     # round up duration to slice_size
     duration = int(ceil(duration / slice_size) * slice_size)
 
+    # Set optimization type: GRBs use TIME (schedule ASAP), others use AIRMASS
+    from kernel.reservation import OptimizationType
+    optimization_type = OptimizationType.TIME if type_id == 'G' else OptimizationType.AIRMASS
+
+    # Get GRB-specific fields if available
+    grb_date = row.get('grb_date') if type_id == 'G' else None
+
     request = Request(
         id=tar_id,
         tar_ra=tar_ra,
@@ -268,7 +277,10 @@ def _process_target_row(row, slice_size, median_durations, default_duration, tel
         pm_dec=row['tar_pm_dec'],
         sinfo=sinfo,
         telescope_name=telescope_id,
-        last_observation_time=row['last_observation_time']
+        last_observation_time=row['last_observation_time'],
+        type_id=type_id,
+        grb_date=grb_date,
+        optimization_type=optimization_type
     )
     return request
 

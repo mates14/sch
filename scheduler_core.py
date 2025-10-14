@@ -90,6 +90,7 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     requests_by_resource = {}
     schedule_start_times_by_resource = {}
     grb_detected = False
+    all_urgent_grbs = []  # Track urgent GRBs across all resources
 
     for resource_name in resources:
         db_config = config.get_resource_db_config(resource_name)
@@ -127,10 +128,13 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
                     if hours_since_grb <= 1.0:  # Only disrupt for very fresh GRBs
                         urgent_grbs.append(grb_req)
 
+            # NOTE: Don't set grb_detected=True yet!
+            # We'll check visibility below before deciding to interrupt.
+            # For now, just log what we found and collect urgent GRBs
             if urgent_grbs:
-                grb_detected = True
-                logger.warning(f"*** {len(urgent_grbs)} URGENT GRB target(s) found on {resource_name} "
-                              f"(<1h old, triggering immediate mode)! ***")
+                all_urgent_grbs.extend(urgent_grbs)
+                logger.info(f"Found {len(urgent_grbs)} fresh GRB target(s) on {resource_name} "
+                           f"(<1h old, will check if visible for immediate scheduling)")
             elif grb_requests:
                 logger.info(f"Found {len(grb_requests)} older GRB target(s) on {resource_name} "
                            f"(>1h old, will schedule normally without disruption)")
@@ -138,25 +142,49 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
             all_requests.extend(requests)
             requests_by_resource[resource_name] = {r.id: r for r in requests}
 
-    # Determine actual start time based on database results
-    if grb_detected:
-        start_time = datetime.utcnow()  # Immediate scheduling for GRBs
-        logger.warning("*** GRB MODE: Immediate scheduling ***")
+    # Check if any urgent GRBs are visible NOW on each telescope
+    # Override start time per-telescope if GRB is visible on that telescope
+    if all_urgent_grbs:
+        now = datetime.utcnow()
+        from astropy.coordinates import SkyCoord, AltAz
+        from astropy.time import Time
+        import astropy.units as u
+
+        for resource_name, res_info in resources.items():
+            for grb_req in all_urgent_grbs:
+                # Check if this GRB is visible NOW on this telescope
+                target_coord = SkyCoord(ra=grb_req.tar_ra*u.deg, dec=grb_req.tar_dec*u.deg)
+                obs_time = Time(now)
+                altaz_frame = AltAz(obstime=obs_time, location=res_info['earth_location'])
+                altaz = target_coord.transform_to(altaz_frame)
+
+                # Check if above horizon
+                horizon_alt = horizon_functions[resource_name](altaz.az.degree)
+
+                if altaz.alt.degree > horizon_alt:
+                    # GRB is visible NOW on this telescope! Override start time
+                    schedule_start_times_by_resource[resource_name] = now
+                    logger.warning(f"*** URGENT: GRB {grb_req.name} (ID {grb_req.id}) visible NOW "
+                                 f"on {resource_name} (alt={altaz.alt.degree:.1f}°, min={horizon_alt:.1f}°) "
+                                 f"- Triggering immediate scheduling for this telescope ***")
+                    break  # One visible GRB is enough to trigger immediate mode for this telescope
+
+    # Determine global start time (earliest across all telescopes) for scheduling window calculation
+    if schedule_start_times_by_resource:
+        # Strip timezone info from all times to work in UTC-naive environment
+        normalized_times = []
+        for time_val in schedule_start_times_by_resource.values():
+            if time_val.tzinfo is not None:
+                # Convert to UTC and remove timezone info
+                utc_tuple = time_val.utctimetuple()
+                normalized_times.append(datetime(*utc_tuple[:6]))
+            else:
+                normalized_times.append(time_val)
+        start_time = min(normalized_times)
     else:
-        if schedule_start_times_by_resource:
-            # Strip timezone info from all times to work in UTC-naive environment
-            normalized_times = []
-            for time_val in schedule_start_times_by_resource.values():
-                if time_val.tzinfo is not None:
-                    # Convert to UTC and remove timezone info
-                    utc_tuple = time_val.utctimetuple()
-                    normalized_times.append(datetime(*utc_tuple[:6]))
-                else:
-                    normalized_times.append(time_val)
-            start_time = min(normalized_times)
-        else:
-            start_time = datetime.utcnow()
-        logger.info(f"Peace mode: scheduling starts at {start_time}")
+        start_time = datetime.utcnow()
+
+    logger.info(f"Scheduling window starts at {start_time} (earliest across all telescopes)")
 
     # NOW continue with time-dependent calculations using the determined start_time
     end_time = astro_utils.find_next_sunrise(start_time, resources, slice_size)
@@ -182,8 +210,21 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     gpw_dict = {res: Intervals(windows)
                for res, windows in night_intervals.items()}
 
-    # Exclude manual schedule intervals (queue_id == 1) from globally possible windows
+    # Exclude time before each telescope's specific start time and manual schedule intervals
     for resource_name in resources:
+        # Exclude time before this telescope's start time
+        telescope_start = schedule_start_times_by_resource.get(resource_name, start_time)
+        if telescope_start.tzinfo is not None:
+            telescope_start = telescope_start.replace(tzinfo=None)
+
+        if telescope_start > start_time:
+            # Create interval from global start to this telescope's start and exclude it
+            pre_start_interval = Intervals([(start_time, telescope_start)])
+            gpw_dict[resource_name] = gpw_dict[resource_name].subtract(pre_start_interval)
+            logger.info(f"Excluded pre-start time window for {resource_name}: "
+                       f"{start_time} to {telescope_start} (preserving current observation)")
+
+        # Exclude manual schedule intervals (queue_id == 1)
         db_config = config.get_resource_db_config(resource_name)
         with database.get_connection(db_config) as conn:
             manual_intervals = database.get_manual_schedule_intervals(conn, start_time, end_time)

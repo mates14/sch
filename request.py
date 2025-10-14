@@ -34,11 +34,13 @@ class Request:
                  scheduled_reservation=None, name=None, base_priority=100, comment=None,
                  bonus=None, bonus_time=None, next_observable=None, info=None,
                  interruptible=None, pm_ra=None, pm_dec=None, last_observation_time=None,
-                 mag=None, sinfo="", telescope_name=None):
+                 mag=None, sinfo="", telescope_name=None, type_id=None, grb_date=None):
         """
         Args:
             sinfo: sinfo string from this telescope's database
             telescope_name: Name of telescope this request is for
+            type_id: Target type identifier (e.g., 'G' for GRB, 'O' for opportunity)
+            grb_date: For GRB targets, the date/time of the GRB trigger
         """
         self.id = id
         self.tar_ra = tar_ra
@@ -64,6 +66,8 @@ class Request:
         self.airmass_data = {}
         self.moon_penalty_data = {}  # Cache moon penalties like airmass
         self.telescope_name = telescope_name
+        self.type_id = type_id
+        self.grb_date = grb_date
 
         # Parse sinfo for this telescope
         self.parsed_sinfo = parse_sinfo(sinfo)
