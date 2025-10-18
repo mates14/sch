@@ -190,9 +190,12 @@ def calculate_visibility(target, resources, slice_centers, sun_positions,
 
 def filter_meridian_crossing_windows(target, windows, resource_info):
     """
-    Remove visibility windows that cross the meridian (HA=0) for German mounts.
+    Split visibility windows at meridian crossing (HA=0) for German mounts.
 
-    Exception: GRBs are never filtered - urgency outweighs meridian flip inconvenience.
+    This prevents observations from tracking across the meridian, but allows
+    the target to be observed on either side of the meridian.
+
+    Exception: GRBs are never split - urgency outweighs meridian flip inconvenience.
 
     Args:
         target: Target object with tar_ra and tar_dec
@@ -200,7 +203,7 @@ def filter_meridian_crossing_windows(target, windows, resource_info):
         resource_info: Resource dict with 'earth_location' and optionally 'mount_type'
 
     Returns:
-        Filtered list of windows that don't cross the meridian
+        List of windows split at meridian crossing points
     """
     # Never filter GRBs - too urgent to miss
     if target and hasattr(target, 'type_id') and target.type_id == 'G':
@@ -214,7 +217,7 @@ def filter_meridian_crossing_windows(target, windows, resource_info):
     if not windows or target is None:
         return windows
 
-    safe_windows = []
+    split_windows = []
     observatory = resource_info['earth_location']
     target_coord = SkyCoord(ra=target.tar_ra*u.degree, dec=target.tar_dec*u.degree, frame='icrs')
 
@@ -232,21 +235,49 @@ def filter_meridian_crossing_windows(target, windows, resource_info):
         end_ha = (end_lst - target_coord.ra).wrap_at(180*u.deg).degree
 
         # Check if window crosses HA=0 (meridian)
-        # Crossing happens if: start_ha and end_ha have different signs AND they're not wrapping around at ±180°
         crosses_meridian = False
-
         if start_ha * end_ha < 0:  # Different signs
             # Check if it's a real crossing (near 0°) or just wrapping (near ±180°)
             if abs(start_ha) < 90 and abs(end_ha) < 90:
                 crosses_meridian = True
 
         if not crosses_meridian:
-            safe_windows.append((start_time, end_time))
+            # Window doesn't cross meridian, keep it as-is
+            split_windows.append((start_time, end_time))
         else:
-            logger.info(f"Filtered out window crossing meridian: {start_time} to {end_time} "
-                       f"(HA {start_ha:.1f}° → {end_ha:.1f}°)")
+            # Window crosses meridian - find the crossing time and split
+            # Binary search for the meridian crossing time
+            left = start_time
+            right = end_time
 
-    return safe_windows
+            # Find crossing time within 1 second precision
+            while (right - left).total_seconds() > 1:
+                mid = left + (right - left) / 2
+                mid_time = Time(mid)
+                mid_lst = mid_time.sidereal_time('apparent', longitude=observatory.lon)
+                mid_ha = (mid_lst - target_coord.ra).wrap_at(180*u.deg).degree
+
+                if mid_ha < 0:
+                    left = mid
+                else:
+                    right = mid
+
+            meridian_time = left + (right - left) / 2
+
+            # Create two windows: before and after meridian
+            # Add small buffer (30 seconds) around meridian to avoid edge cases
+            buffer = timedelta(seconds=30)
+
+            if (meridian_time - start_time).total_seconds() > 60:  # Only if >1 min
+                split_windows.append((start_time, meridian_time - buffer))
+
+            if (end_time - meridian_time).total_seconds() > 60:  # Only if >1 min
+                split_windows.append((meridian_time + buffer, end_time))
+
+            logger.info(f"Split window at meridian crossing: {start_time} to {end_time} "
+                       f"→ split at {meridian_time} (HA {start_ha:.1f}° → {end_ha:.1f}°)")
+
+    return split_windows
 
 
 def _bool_array_to_intervals(visible_array, slice_centers, slice_size):
