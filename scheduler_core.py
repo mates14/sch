@@ -232,10 +232,14 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
             with database.get_connection(db_config) as conn:
                 preserved_obs = database.get_current_executing_observation(conn)
                 if preserved_obs:
-                    duration_hours = (preserved_obs['time_end'] - datetime.utcnow()).total_seconds() / 3600
+                    # Strip timezone info for calculation
+                    time_end = preserved_obs['time_end']
+                    if time_end.tzinfo is not None:
+                        time_end = time_end.replace(tzinfo=None)
+                    duration_hours = (time_end - datetime.utcnow()).total_seconds() / 3600
                     logger.info(f"Scheduling for {resource_name} starts at {telescope_start} "
                                f"(preserving observation of target {preserved_obs['tar_id']} "
-                               f"ending at {preserved_obs['time_end']}, {duration_hours:.1f}h remaining)")
+                               f"ending at {time_end}, {duration_hours:.1f}h remaining)")
                 else:
                     logger.info(f"Scheduling for {resource_name} starts at {telescope_start}")
 
