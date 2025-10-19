@@ -152,22 +152,27 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
 
         for resource_name, res_info in resources.items():
             for grb_req in all_urgent_grbs:
-                # Check if this GRB is visible NOW on this telescope
-                target_coord = SkyCoord(ra=grb_req.tar_ra*u.deg, dec=grb_req.tar_dec*u.deg)
-                obs_time = Time(now)
-                altaz_frame = AltAz(obstime=obs_time, location=res_info['earth_location'])
-                altaz = target_coord.transform_to(altaz_frame)
+                try:
+                    # Check if this GRB is visible NOW on this telescope
+                    target_coord = SkyCoord(ra=grb_req.tar_ra*u.deg, dec=grb_req.tar_dec*u.deg)
+                    obs_time = Time(now)
+                    altaz_frame = AltAz(obstime=obs_time, location=res_info['earth_location'])
+                    altaz = target_coord.transform_to(altaz_frame)
 
-                # Check if above horizon
-                horizon_alt = horizon_functions[resource_name](altaz.az.degree)
+                    # Check if above horizon
+                    horizon_alt = horizon_functions[resource_name](altaz.az.degree)
 
-                if altaz.alt.degree > horizon_alt:
-                    # GRB is visible NOW on this telescope! Override start time
-                    schedule_start_times_by_resource[resource_name] = now
-                    logger.warning(f"*** URGENT: GRB {grb_req.name} (ID {grb_req.id}) visible NOW "
-                                 f"on {resource_name} (alt={altaz.alt.degree:.1f}°, min={horizon_alt:.1f}°) "
-                                 f"- Triggering immediate scheduling for this telescope ***")
-                    break  # One visible GRB is enough to trigger immediate mode for this telescope
+                    if altaz.alt.degree > horizon_alt:
+                        # GRB is visible NOW on this telescope! Override start time
+                        schedule_start_times_by_resource[resource_name] = now
+                        logger.warning(f"*** URGENT: GRB {grb_req.name} (ID {grb_req.id}) visible NOW "
+                                     f"on {resource_name} (alt={altaz.alt.degree:.1f}°, min={horizon_alt:.1f}°) "
+                                     f"- Triggering immediate scheduling for this telescope ***")
+                        break  # One visible GRB is enough to trigger immediate mode for this telescope
+                except Exception as e:
+                    logger.error(f"Error checking visibility for GRB {grb_req.id} ({grb_req.name}) "
+                               f"on {resource_name}: {e}", exc_info=True)
+                    # Continue checking other GRBs - don't let one bad GRB break everything
 
     # Determine global start time (earliest across all telescopes) for scheduling window calculation
     if schedule_start_times_by_resource:
@@ -221,8 +226,18 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
             # Create interval from global start to this telescope's start and exclude it
             pre_start_interval = Intervals([(start_time, telescope_start)])
             gpw_dict[resource_name] = gpw_dict[resource_name].subtract(pre_start_interval)
-            logger.info(f"Excluded pre-start time window for {resource_name}: "
-                       f"{start_time} to {telescope_start} (preserving current observation)")
+
+            # Query database to get details about what's being preserved
+            db_config = config.get_resource_db_config(resource_name)
+            with database.get_connection(db_config) as conn:
+                preserved_obs = database.get_current_executing_observation(conn)
+                if preserved_obs:
+                    duration_hours = (preserved_obs['time_end'] - datetime.utcnow()).total_seconds() / 3600
+                    logger.info(f"Scheduling for {resource_name} starts at {telescope_start} "
+                               f"(preserving observation of target {preserved_obs['tar_id']} "
+                               f"ending at {preserved_obs['time_end']}, {duration_hours:.1f}h remaining)")
+                else:
+                    logger.info(f"Scheduling for {resource_name} starts at {telescope_start}")
 
         # Exclude manual schedule intervals (queue_id == 1)
         db_config = config.get_resource_db_config(resource_name)
