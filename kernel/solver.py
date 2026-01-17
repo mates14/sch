@@ -41,7 +41,8 @@ class CPScheduler(BaseScheduler):
     def __init__(self, compound_reservation_list, globally_possible_windows_dict,
                  slice_size_seconds, timelimit=180, mip_gap=0.05,
                  celestial_data=None, slice_centers=None,
-                 moon_min_distance=10.0, moon_penalty_range=30.0):
+                 moon_min_distance=10.0, moon_penalty_range=30.0,
+                 telescope_preference=None):
         """
         Initialize the CP scheduler.
 
@@ -55,6 +56,7 @@ class CPScheduler(BaseScheduler):
             slice_centers: Time points for celestial calculations
             moon_min_distance: Minimum distance from moon (degrees)
             moon_penalty_range: Distance where moon penalties apply (degrees)
+            telescope_preference: Dict mapping telescope names to preference multipliers
         """
         super().__init__(
             compound_reservation_list,
@@ -71,6 +73,9 @@ class CPScheduler(BaseScheduler):
         self.slice_centers = slice_centers
         self.moon_min_distance = moon_min_distance
         self.moon_penalty_range = moon_penalty_range
+
+        # Telescope preference multipliers
+        self.telescope_preference = telescope_preference if telescope_preference is not None else {}
 
         # Data structures for the solver
         self.Yik = []  # Maps idx -> [resID, window_idx, priority, resource]
@@ -176,6 +181,10 @@ class CPScheduler(BaseScheduler):
                     final_priority = base_priority * r.request.calculate_time_based_priority(ps.internal_start)
                 else:
                     final_priority = base_priority
+
+                # Apply telescope preference multiplier
+                telescope_multiplier = self.telescope_preference.get(ps.resource, 1.0)
+                final_priority *= telescope_multiplier
 
                 self.Yik.append([r.resID, w_idx, final_priority, ps.resource, scheduled])
                 w_idx += 1

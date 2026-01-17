@@ -46,6 +46,9 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
     moon_min_distance = config.get_scheduler_param('moon_min_distance', 10.0)
     moon_penalty_range = config.get_scheduler_param('moon_penalty_range', 30.0)
 
+    # Get telescope preference configuration
+    telescope_preference = config.get_scheduler_param('telescope_preference', {})
+
     scheduler = CPScheduler(
         compound_reservation_list=reservations,
         globally_possible_windows_dict=gpw_dict,
@@ -55,7 +58,8 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
         celestial_data=celestial_data,
         slice_centers=slice_centers,
         moon_min_distance=moon_min_distance,
-        moon_penalty_range=moon_penalty_range
+        moon_penalty_range=moon_penalty_range,
+        telescope_preference=telescope_preference
     )
 
     schedule = scheduler.schedule_all()
