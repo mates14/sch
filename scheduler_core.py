@@ -344,7 +344,11 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
                 if telescope_request.has_and_type(): has_and_type = True
 
         # Check for priority mismatch across telescopes
-        if len(priorities_by_telescope) > 1:
+        if not priorities_by_telescope:
+            # No telescopes have this target with valid visibility windows
+            logger.debug(f"Target {request.id} ({request.name}) has no telescope assignments with visibility")
+            continue
+        elif len(priorities_by_telescope) > 1:
             priority_values = list(priorities_by_telescope.values())
             min_priority = min(priority_values)
             max_priority = max(priority_values)
