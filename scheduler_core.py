@@ -330,23 +330,51 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
         if not possible_windows:
             continue
 
-        # Check which telescopes have this target
-        target_reservations = []
+        # Check which telescopes have this target and collect priorities
+        telescope_requests = {}
+        priorities_by_telescope = {}
         has_and_type = False
 
         for res_name, req_dict in requests_by_resource.items():
             if request.id in req_dict and res_name in possible_windows:
                 telescope_request = req_dict[request.id]
+                telescope_requests[res_name] = telescope_request
+                priorities_by_telescope[res_name] = telescope_request.base_priority
 
                 if telescope_request.has_and_type(): has_and_type = True
 
-                reservation = Reservation(
-                    priority=telescope_request.base_priority,
-                    duration=telescope_request.duration,
-                    possible_windows_dict={res_name: possible_windows[res_name]},
-                    request=telescope_request
-                )
-                target_reservations.append(reservation)
+        # Check for priority mismatch across telescopes
+        if len(priorities_by_telescope) > 1:
+            priority_values = list(priorities_by_telescope.values())
+            min_priority = min(priority_values)
+            max_priority = max(priority_values)
+
+            if min_priority != max_priority:
+                # Priorities differ - issue warning and use average
+                avg_priority = sum(priority_values) / len(priority_values)
+                telescopes_str = ", ".join([f"{name}={pri}" for name, pri in priorities_by_telescope.items()])
+                logger.warning(f"Target {request.id} ({request.name}) has different priorities in telescope databases: "
+                              f"{telescopes_str}. Using average priority {avg_priority:.2f}")
+
+                # Use the average priority for all reservations
+                unified_priority = avg_priority
+            else:
+                # Priorities are the same across all telescopes
+                unified_priority = priority_values[0]
+        else:
+            # Only one telescope has this target
+            unified_priority = list(priorities_by_telescope.values())[0]
+
+        # Create reservations with unified priority
+        target_reservations = []
+        for res_name, telescope_request in telescope_requests.items():
+            reservation = Reservation(
+                priority=unified_priority,
+                duration=telescope_request.duration,
+                possible_windows_dict={res_name: possible_windows[res_name]},
+                request=telescope_request
+            )
+            target_reservations.append(reservation)
 
         # Create compound reservation
         if has_and_type:  # Check for 'and' first (dominant)

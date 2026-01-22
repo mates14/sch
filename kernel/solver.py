@@ -76,6 +76,8 @@ class CPScheduler(BaseScheduler):
 
         # Telescope preference multipliers
         self.telescope_preference = telescope_preference if telescope_preference is not None else {}
+        if self.telescope_preference:
+            logger.info(f"Telescope preferences: {self.telescope_preference}")
 
         # Data structures for the solver
         self.Yik = []  # Maps idx -> [resID, window_idx, priority, resource]
@@ -140,6 +142,7 @@ class CPScheduler(BaseScheduler):
 
     def _build_data_structures(self):
         """Build the data structures needed for the solver."""
+        debug_count = 0  # Only log first few applications
         for r in self.reservation_list:
             r.possible_starts = []
             r.Yik_entries = []
@@ -184,6 +187,10 @@ class CPScheduler(BaseScheduler):
 
                 # Apply telescope preference multiplier
                 telescope_multiplier = self.telescope_preference.get(ps.resource, 1.0)
+                if debug_count < 5 and telescope_multiplier != 1.0:
+                    logger.debug(f"Applying {telescope_multiplier}x multiplier for {ps.resource}: "
+                                f"priority {final_priority:.2f} -> {final_priority * telescope_multiplier:.2f}")
+                    debug_count += 1
                 final_priority *= telescope_multiplier
 
                 self.Yik.append([r.resID, w_idx, final_priority, ps.resource, scheduled])
