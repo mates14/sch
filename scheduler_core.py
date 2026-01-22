@@ -330,9 +330,10 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
         if not possible_windows:
             continue
 
-        # Check which telescopes have this target and collect priorities
+        # Check which telescopes have this target and collect priorities and durations
         telescope_requests = {}
         priorities_by_telescope = {}
+        durations_by_telescope = {}
         has_and_type = False
 
         for res_name, req_dict in requests_by_resource.items():
@@ -340,15 +341,17 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
                 telescope_request = req_dict[request.id]
                 telescope_requests[res_name] = telescope_request
                 priorities_by_telescope[res_name] = telescope_request.base_priority
+                durations_by_telescope[res_name] = telescope_request.duration
 
                 if telescope_request.has_and_type(): has_and_type = True
 
-        # Check for priority mismatch across telescopes
+        # Check if target is visible from any telescope
         if not priorities_by_telescope:
-            # No telescopes have this target with valid visibility windows
             logger.debug(f"Target {request.id} ({request.name}) has no telescope assignments with visibility")
             continue
-        elif len(priorities_by_telescope) > 1:
+
+        # Check for priority mismatch across telescopes and use average if needed
+        if len(priorities_by_telescope) > 1:
             priority_values = list(priorities_by_telescope.values())
             min_priority = min(priority_values)
             max_priority = max(priority_values)
@@ -359,21 +362,50 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
                 telescopes_str = ", ".join([f"{name}={pri}" for name, pri in priorities_by_telescope.items()])
                 logger.warning(f"Target {request.id} ({request.name}) has different priorities in telescope databases: "
                               f"{telescopes_str}. Using average priority {avg_priority:.2f}")
-
-                # Use the average priority for all reservations
-                unified_priority = avg_priority
+                base_priority = avg_priority
             else:
                 # Priorities are the same across all telescopes
-                unified_priority = priority_values[0]
+                base_priority = priority_values[0]
         else:
             # Only one telescope has this target
-            unified_priority = list(priorities_by_telescope.values())[0]
+            base_priority = list(priorities_by_telescope.values())[0]
 
-        # Create reservations with unified priority
+        # Adjust priorities to keep priority×duration constant across telescopes
+        # This ensures fair competition between telescopes regardless of aperture differences
+        adjusted_priorities = {}
+        if len(durations_by_telescope) > 1:
+            duration_values = list(durations_by_telescope.values())
+            avg_duration = sum(duration_values) / len(duration_values)
+
+            # Check if durations differ
+            min_duration = min(duration_values)
+            max_duration = max(duration_values)
+
+            if min_duration != max_duration:
+                # Adjust each telescope's priority to normalize priority×duration
+                for res_name, dur in durations_by_telescope.items():
+                    adjustment_factor = avg_duration / dur
+                    adjusted_priorities[res_name] = base_priority * adjustment_factor
+
+                # Log the adjustment
+                telescopes_str = ", ".join([f"{name}={dur}s->pri×{avg_duration/dur:.2f}"
+                                           for name, dur in durations_by_telescope.items()])
+                logger.info(f"Target {request.id} ({request.name}) has different durations across telescopes: "
+                           f"{telescopes_str}. Adjusting priorities to keep priority×duration={base_priority*avg_duration:.0f} constant")
+            else:
+                # Durations are the same, no adjustment needed
+                for res_name in durations_by_telescope.keys():
+                    adjusted_priorities[res_name] = base_priority
+        else:
+            # Only one telescope has this target, no adjustment needed
+            for res_name in durations_by_telescope.keys():
+                adjusted_priorities[res_name] = base_priority
+
+        # Create reservations with adjusted priorities and actual durations
         target_reservations = []
         for res_name, telescope_request in telescope_requests.items():
             reservation = Reservation(
-                priority=unified_priority,
+                priority=adjusted_priorities[res_name],
                 duration=telescope_request.duration,
                 possible_windows_dict={res_name: possible_windows[res_name]},
                 request=telescope_request
