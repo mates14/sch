@@ -176,7 +176,11 @@ class CPScheduler(BaseScheduler):
                 if r.request and r.request.optimization_type == OptimizationType.AIRMASS:
                     base_priority = r.priority / ps.airmass_coefficient
                 else:
-                    base_priority = r.priority + (10 / (w_idx + 1.0))
+                    # TIME optimization (GRBs): strongly prefer earlier windows
+                    # Use multiplicative bonus that decreases with window index
+                    # First window gets full priority, later windows get progressively less
+                    early_time_factor = 10.0 / (w_idx + 1.0)  # 10x for first, 5x for second, etc.
+                    base_priority = r.priority * early_time_factor
 
                 base_priority *= r.duration  # fair handling of long requests
 
