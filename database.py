@@ -144,6 +144,7 @@ def fetch_requests(conn, telescope_name, last_noon):
         WHERE
         t.tar_enabled = TRUE
         AND t.type_id = 'G'
+        AND (SELECT MAX(obs_end) FROM observations WHERE tar_id = t.tar_id AND obs_state IS NOT NULL) IS NULL
     """
 
     # Query for opportunity targets (type_id='O')

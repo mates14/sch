@@ -30,8 +30,13 @@ def main():
     parser = argparse.ArgumentParser(description='RTS2 telescope scheduler')
     parser.add_argument('--config', '-c', default='rts2-scheduler.cfg',
                        help='Path to configuration file')
-    parser.add_argument('--skip-state-check', '-f', action='store_true',
+    parser.add_argument('--skip-state-check', '-s', action='store_true',
                        help='Skip telescope state check (for testing)')
+    parser.add_argument('--force', '-f', nargs='?', const=True, default=None,
+                       metavar='TELESCOPE',
+                       help='Force immediate rescheduling from now, ignoring the currently '
+                            'running observation. Optionally specify a telescope name to '
+                            'force only that telescope; omit to force all.')
     parser.add_argument('--no-upload', action='store_true',
                        help='Skip uploading schedule to RTS2')
     parser.add_argument('--no-plot', action='store_true',
@@ -57,8 +62,19 @@ def main():
             logger.warning("Skipping telescope state check")
             available_telescopes = {name: True for name in config.get_resources()}
 
+        # Determine which telescopes to force-reschedule from now
+        if args.force is None:
+            force_telescopes = None
+        elif args.force is True:
+            force_telescopes = set(config.get_resources().keys())
+            logger.warning(f"Force mode: immediate rescheduling for all telescopes")
+        else:
+            force_telescopes = {args.force}
+            logger.warning(f"Force mode: immediate rescheduling for telescope '{args.force}'")
+
         # Run the scheduling algorithm
-        result = run_scheduling_algorithm(config, available_telescopes, recorder)
+        result = run_scheduling_algorithm(config, available_telescopes, recorder,
+                                          force_telescopes=force_telescopes)
         if not result or not result.get('schedule') or not any(result['schedule'].values()):
             logger.warning("No observations scheduled")
             return 0

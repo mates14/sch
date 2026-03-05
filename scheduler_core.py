@@ -14,7 +14,7 @@ import database
 logger = logging.getLogger(__name__)
 
 
-def run_scheduling_algorithm(config, available_telescopes, recorder):
+def run_scheduling_algorithm(config, available_telescopes, recorder, force_telescopes=None):
     """Run the complete scheduling algorithm."""
     # Filter resources to available telescopes
     all_resources = config.get_resources()
@@ -33,7 +33,7 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
     # Prepare inputs
     logger.info("Preparing scheduler inputs")
     gpw_dict, reservations, schedule_start_times_by_telescope, celestial_data, slice_centers = _prepare_scheduler_input(
-        resources, config, slice_size, recorder, horizon_functions
+        resources, config, slice_size, recorder, horizon_functions, force_telescopes
     )
 
     if not reservations:
@@ -78,7 +78,7 @@ def run_scheduling_algorithm(config, available_telescopes, recorder):
     }
 
 
-def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_functions):
+def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_functions, force_telescopes=None):
     """Prepare all inputs for the scheduler."""
     # Ensure earth locations exist
     resources = astro_utils.ensure_earth_locations(resources)
@@ -101,6 +101,9 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
         with database.get_connection(db_config) as conn:
             target_rows, schedule_start_time = database.fetch_requests(conn, resource_name, last_noon)
 
+            if force_telescopes and resource_name in force_telescopes:
+                schedule_start_time = datetime.utcnow()
+                logger.warning(f"Force mode: overriding schedule start time for {resource_name} to NOW")
             schedule_start_times_by_resource[resource_name] = schedule_start_time
             # Convert rows to Request objects (existing conversion logic)
             requests = []
