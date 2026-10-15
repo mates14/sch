@@ -116,16 +116,16 @@ class Reservation(object):
         #print("Reservation::__lt__")
         ''' Higher priority number is higher priority.
         If priority numbers are equal, then reservation belonging to
-        c.r.s are ranked as and < single < oneof '''
+        c.r.s are ranked as and/sim < single < oneof '''
         if self.priority == other.priority:
             if (self.compound_reservation_parent) and (other.compound_reservation_parent):
                 selftype = self.compound_reservation_parent.type
                 othertype = other.compound_reservation_parent.type
                 if selftype == othertype:
                     return self.priority > other.priority
-                elif selftype == 'and':
+                elif selftype in ('and', 'sim'):
                     return True
-                elif othertype == 'and':
+                elif othertype in ('and', 'sim'):
                     return False
                 elif selftype == 'oneof':
                     return False
@@ -155,10 +155,11 @@ class CompoundReservation(object):
         'single': 'A single one of the provided blocks is to be scheduled',
         'oneof': 'One of the provided blocks are to be scheduled',
         'and': 'All of the provided blocks are to be scheduled',
+        'sim': 'All of the provided blocks are to be scheduled, starting together',
         'many': 'Any of the provided blocks are to be scheduled individually'
     }
 
-    def __init__(self, reservation_list, cr_type='single'):
+    def __init__(self, reservation_list, cr_type='single', sim_tolerance=None):
         self.reservation_list = reservation_list
         for r in self.reservation_list:
             r.compound_reservation_parent = self
@@ -167,6 +168,10 @@ class CompoundReservation(object):
         # single
         # oneof
         # and
+        # sim
+        # sim_tolerance is the allowed start-time spread in seconds for 'sim';
+        # None lets the scheduler pick its default (one time slice).
+        self.sim_tolerance = sim_tolerance
         self.size = len(reservation_list)
         if cr_type == 'single' and self.size > 1:
             msg = ("Initializing a CompoundReservation as 'single' but with %d "
@@ -175,10 +180,10 @@ class CompoundReservation(object):
             print(msg)
             self.size = 1
             self.reservation_list = [reservation_list.pop(0)]
-        if (cr_type == 'and') and (self.size == 1):
-            msg = ("Initializing a CompoundReservation as 'and' but with %d "
+        if (cr_type in ('and', 'sim')) and (self.size == 1):
+            msg = ("Initializing a CompoundReservation as '%s' but with %d "
                    "individual reservation."
-                   % self.size)
+                   % (cr_type, self.size))
             print(msg)
         if cr_type == 'oneof' and self.size == 1:
             msg = ("Initializing a CompoundReservation as 'oneof' but with %d "
@@ -192,7 +197,7 @@ class CompoundReservation(object):
             self.scheduled = True
         elif self.type == 'oneof':
             self.scheduled = True
-        elif self.type == 'and':
+        elif self.type in ('and', 'sim'):
             count = 0
             for r in self.reservation_list:
                 if r.scheduled:
@@ -208,7 +213,7 @@ class CompoundReservation(object):
             for r in self.reservation_list:
                 if r.scheduled:
                     self.scheduled = True
-        elif self.type == 'and':
+        elif self.type in ('and', 'sim'):
             self.scheduled = False
 
     def issingle(self):
@@ -225,6 +230,12 @@ class CompoundReservation(object):
 
     def isand(self):
         if self.type == "and":
+            return True
+        else:
+            return False
+
+    def issim(self):
+        if self.type == "sim":
             return True
         else:
             return False

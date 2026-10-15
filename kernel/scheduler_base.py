@@ -31,6 +31,8 @@ class BaseScheduler:
         # Initialize constraints
         self.and_constraints = []
         self.oneof_constraints = []
+        # sim_constraints holds (reservations, tolerance_seconds_or_None) tuples
+        self.sim_constraints = []
 
         # Convert compound to simple reservations
         self.reservation_list, self.reservation_dict = self._convert_compound_to_simple()
@@ -65,6 +67,13 @@ class BaseScheduler:
                     reservation_list.extend(valid_reservations)
                     reservation_dict.update({r.resID: r for r in valid_reservations})
                     self.and_constraints.append(valid_reservations)
+
+            elif cr.issim():
+                # Like 'and', an incomplete group cannot be honoured at all
+                if len(valid_reservations) == len(cr.reservation_list):
+                    reservation_list.extend(valid_reservations)
+                    reservation_dict.update({r.resID: r for r in valid_reservations})
+                    self.sim_constraints.append((valid_reservations, cr.sim_tolerance))
 
         return reservation_list, reservation_dict
 

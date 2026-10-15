@@ -349,6 +349,8 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
         priorities_by_telescope = {}
         durations_by_telescope = {}
         has_and_type = False
+        has_sim_type = False
+        sim_tolerances = []
 
         for res_name, req_dict in requests_by_resource.items():
             if request.id in req_dict and res_name in possible_windows:
@@ -358,6 +360,12 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
                 durations_by_telescope[res_name] = telescope_request.duration
 
                 if telescope_request.has_and_type(): has_and_type = True
+
+                if telescope_request.has_sim_type():
+                    has_sim_type = True
+                    tol = telescope_request.get_sim_tolerance()
+                    if tol is not None:
+                        sim_tolerances.append(tol)
 
         # Check if target is visible from any telescope
         if not priorities_by_telescope:
@@ -427,7 +435,17 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
             target_reservations.append(reservation)
 
         # Create compound reservation
-        if has_and_type:  # Check for 'and' first (dominant)
+        if has_sim_type and len(target_reservations) > 1:  # 'sim' is the most restrictive
+            # If the telescope databases disagree, the strictest tolerance wins
+            sim_tolerance = min(sim_tolerances) if sim_tolerances else None
+            logger.info(f"Target {request.id} ({request.name}) requested simultaneously on "
+                        f"{', '.join(telescope_requests.keys())}"
+                        + (f", tolerance {sim_tolerance:.0f}s" if sim_tolerance is not None else ""))
+            compound_reservations.append(
+                CompoundReservation(target_reservations, cr_type='sim',
+                                    sim_tolerance=sim_tolerance)
+            )
+        elif has_and_type:  # Check for 'and' next (dominant over 'oneof')
             compound_reservations.append(
                 CompoundReservation(target_reservations, cr_type='and')
             )
@@ -436,6 +454,9 @@ def create_compound_reservations(all_requests, requests_by_resource, resources,
                 CompoundReservation(target_reservations, cr_type='oneof')
             )
         elif len(target_reservations) == 1:
+            if has_sim_type:
+                logger.warning(f"Target {request.id} ({request.name}) asks for type=sim but is "
+                               f"schedulable on one telescope only; treating as single")
             compound_reservations.append(
                 CompoundReservation(target_reservations, cr_type='single')
             )

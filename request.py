@@ -22,7 +22,7 @@ def parse_sinfo(sinfo_str):
         return {}
 
     params = {}
-    for item in sinfo_str.split(','):
+    for item in sinfo_str.split():
         if '=' in item:
             key, value = item.strip().split('=', 1)
             params[key.strip()] = value.strip()
@@ -94,8 +94,28 @@ class Request:
         return float(self.parsed_sinfo.get('pscale', 1.0))
 
     def has_and_type(self):
-        """Check if this request specifies type=and."""
+        """Check if this request specifies type=and (all telescopes, any time)."""
         return self.parsed_sinfo.get('type') == 'and'
+
+    def has_sim_type(self):
+        """Check if this request specifies type=sim (all telescopes, same time)."""
+        return self.parsed_sinfo.get('type') in ('sim', 'simultaneous')
+
+    def get_sim_tolerance(self):
+        """
+        Allowed start-time spread within a simultaneous group, in seconds.
+
+        Returns None when simtol= is absent or unparseable; the scheduler then
+        falls back to one time slice.
+        """
+        if 'simtol' not in self.parsed_sinfo:
+            return None
+        try:
+            return float(self.parsed_sinfo['simtol'])
+        except ValueError:
+            logger.warning(f"Request {self.id}: unparseable simtol="
+                           f"{self.parsed_sinfo['simtol']!r} in sinfo, ignoring")
+            return None
 
     def timescale_func(self, x):
         """

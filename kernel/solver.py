@@ -4,6 +4,7 @@ Merges the functionality of fullscheduler_cp_model.py and slicedipscheduler_v2.p
 Removes all the dead code and experimental methods.
 """
 
+import itertools
 import logging
 import math
 import numpy as np
@@ -300,8 +301,11 @@ class CPScheduler(BaseScheduler):
         for i, andconstraint in enumerate(self.and_constraints):
             and_var = model.NewBoolVar(f'and_{i}')
             for r in andconstraint:
-                for idx in r.Yik_entries:
-                    model.Add(is_scheduled[idx] == and_var)
+                # each member is scheduled exactly once, or none of them is
+                model.Add(sum(is_scheduled[idx] for idx in r.Yik_entries) == and_var).WithName(f'and_{i}_{r.resID}')
+
+        # Simultaneity constraints (all or nothing, and starting together)
+        self._add_sim_constraints(model, is_scheduled)
 
         # No more than one reservation per time slice
         for slice_key, indices in self.aikt.items():
@@ -311,6 +315,44 @@ class CPScheduler(BaseScheduler):
         for r in self.reservation_list:
             if not hasattr(r, 'skip_constraint2'):
                 model.Add(sum(is_scheduled[idx] for idx in r.Yik_entries) <= 1).WithName(f'once_{r.resID}')
+
+    def _add_sim_constraints(self, model, is_scheduled):
+        """
+        Simultaneity: every member of the group is scheduled or none is, and
+        all members start within the group's tolerance of each other.
+
+        The start time of a candidate is pinned to an integer variable per
+        reservation, so the coupling costs O(candidates) constraints rather
+        than the O(candidates^2) of a pairwise forbidden-combination encoding.
+        """
+        for i, (simconstraint, tolerance) in enumerate(self.sim_constraints):
+            sim_var = model.NewBoolVar(f'sim_{i}')
+            start_vars = []
+
+            for r in simconstraint:
+                # all or nothing, exactly as for 'and'
+                model.Add(sum(is_scheduled[idx] for idx in r.Yik_entries) == sim_var).WithName(f'sim_{i}_{r.resID}')
+
+                starts = [int(r.possible_starts[self.Yik[idx][1]].internal_start.timestamp())
+                          for idx in r.Yik_entries]
+                if not starts:
+                    # no candidate start at all: the sum above already pins
+                    # sim_var to 0, leaving nothing to couple
+                    continue
+
+                start_var = model.NewIntVar(min(starts), max(starts), f'sim_{i}_start_{r.resID}')
+                for idx, t in zip(r.Yik_entries, starts):
+                    model.Add(start_var == t).OnlyEnforceIf(is_scheduled[idx])
+                start_vars.append(start_var)
+
+            tol = int(tolerance if tolerance is not None else self.slice_size_seconds)
+            for a, b in itertools.combinations(start_vars, 2):
+                model.Add(a - b <= tol).OnlyEnforceIf(sim_var)
+                model.Add(b - a <= tol).OnlyEnforceIf(sim_var)
+
+            target = simconstraint[0].request.id if simconstraint[0].request else '?'
+            logger.info(f"Simultaneity group {i}: target {target} on "
+                        f"{len(simconstraint)} telescopes, tolerance {tol}s")
 
     def _set_objective(self, model, is_scheduled):
         """Set the optimization objective."""
