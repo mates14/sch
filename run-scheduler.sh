@@ -6,6 +6,11 @@
 #
 # The lock serialises runs: while both cron and the daemon start the
 # scheduler, the second waits for the first instead of planning alongside.
+# A daemon started by root with --run-as keeps root's HOME, and python
+# then misses the user's site-packages (~/.local, where ortools is).
+HOME=$(getent passwd "$(id -u)" | cut -d: -f6)
+export HOME
+
 SCH=$(dirname "$(readlink -f "$0")")
 cd "$SCH/.." || exit 1
 exec flock -w 600 /tmp/rts2-scheduler.lock \
