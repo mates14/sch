@@ -90,7 +90,8 @@ def main():
 
         # Upload to RTS2
         if not args.no_upload:
-            upload_schedule_to_rts2(schedule, config, schedule_start_times)
+            upload_schedule_to_rts2(schedule, config, schedule_start_times,
+                                    result.get('commit_horizon'))
             logger.info("Schedule uploaded to RTS2")
 
         # Create visualization

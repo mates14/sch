@@ -6,7 +6,7 @@ Handles all database connections and queries.
 import psycopg2
 from psycopg2.extras import DictCursor
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from statistics import median
 from math import ceil
 import logging
@@ -113,19 +113,20 @@ def fetch_actual_observations(conn, start_time, end_time):
 
     return observations
 
-def fetch_requests(conn, telescope_name, last_noon):
-    """Fetch all requests excluding currently executing target"""
+def fetch_requests(conn, telescope_name, last_noon, commit_horizon):
+    """Fetch all requests excluding the targets the plan is committed to.
 
-    # Get currently executing observation info
-    current_obs = get_current_executing_observation(conn)
-    current_executing_tar_id = current_obs['tar_id'] if current_obs else None
-    if current_obs and current_obs['time_end']:
-        schedule_start_time = current_obs['time_end']
-        # Strip timezone info to work in UTC-naive environment
-        if schedule_start_time.tzinfo is not None:
-            schedule_start_time = schedule_start_time.replace(tzinfo=None)
-    else:
-        schedule_start_time = datetime.utcnow()
+    Returns the requests and the time the new plan can start: commit_horizon,
+    or the end of the last committed observation if that is later.
+    """
+
+    committed = get_committed_observations(conn, commit_horizon)
+    committed_tar_ids = [obs['tar_id'] for obs in committed]
+    schedule_start_time = commit_horizon
+    for obs in committed:
+        time_end = obs['time_end']
+        if time_end is not None and time_end > schedule_start_time:
+            schedule_start_time = time_end
 
     cursor = conn.cursor(cursor_factory=DictCursor)
 
@@ -167,15 +168,15 @@ def fetch_requests(conn, telescope_name, last_noon):
         )
     """
 
-    # Add exclusion of currently executing target to both queries
+    # Add exclusion of committed targets to both queries
     grb_params = []
     opp_params = [last_noon]
 
-    if current_executing_tar_id:
-        grb_query += " AND t.tar_id != %s"
-        opportunity_query += " AND t.tar_id != %s"
-        grb_params.append(current_executing_tar_id)
-        opp_params.append(current_executing_tar_id)
+    if committed_tar_ids:
+        grb_query += " AND t.tar_id != ALL(%s)"
+        opportunity_query += " AND t.tar_id != ALL(%s)"
+        grb_params.append(committed_tar_ids)
+        opp_params.append(committed_tar_ids)
 
     grb_query += " ORDER BY t.tar_priority DESC"
     opportunity_query += " ORDER BY t.tar_priority DESC"
@@ -457,6 +458,32 @@ def get_current_executing_observation(conn):
         LIMIT 1
     """)
     return cursor.fetchone()  # Returns {'tar_id': 1008, 'time_end': datetime(...)} or None
+
+
+def get_committed_observations(conn, commit_horizon):
+    """Get the plan entries we are committed to: not yet ended, started before
+    commit_horizon. A new plan reaches the database only minutes after the
+    scheduler starts, so whatever begins before then has to stay as planned.
+
+    Times are returned UTC-naive, as the rest of the scheduler works.
+    """
+    cursor = conn.cursor(cursor_factory=DictCursor)
+    cursor.execute("""
+        SELECT tar_id, queue_id, time_start, time_end
+        FROM queues_targets
+        WHERE queue_id IN (1, 2)
+        AND (time_start IS NULL OR time_start < %s)
+        AND (time_end IS NULL OR time_end > %s)
+        ORDER BY time_start
+    """, (commit_horizon, datetime.utcnow()))
+    committed = []
+    for row in cursor.fetchall():
+        obs = dict(row)
+        for key in ('time_start', 'time_end'):
+            if obs[key] is not None and obs[key].tzinfo is not None:
+                obs[key] = obs[key].astimezone(timezone.utc).replace(tzinfo=None)
+        committed.append(obs)
+    return committed
 
 
 def get_schedule_start_info(conn):

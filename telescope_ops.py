@@ -78,7 +78,7 @@ def _get_centrald_state(rts2_config):
     return data.get('state')
 
 
-def upload_schedule_to_rts2(schedule, config, schedule_start_times):
+def upload_schedule_to_rts2(schedule, config, schedule_start_times, commit_horizon=None):
     """Upload schedule to RTS2 via direct database writes."""
     logger.info("Uploading schedule to RTS2")
 
@@ -90,10 +90,11 @@ def upload_schedule_to_rts2(schedule, config, schedule_start_times):
 
         _upload_telescope_schedule(telescope, observations,
                                  config.get_resource_db_config(telescope),
-                                 telescope_start_time)
+                                 telescope_start_time,
+                                 commit_horizon or telescope_start_time)
 
 
-def _upload_telescope_schedule(telescope, observations, db_config, schedule_start_time):
+def _upload_telescope_schedule(telescope, observations, db_config, schedule_start_time, commit_horizon):
     """Upload schedule for a single telescope."""
     if not db_config:
         logger.error(f"No DB config for {telescope}")
@@ -103,14 +104,21 @@ def _upload_telescope_schedule(telescope, observations, db_config, schedule_star
         conn = psycopg2.connect(**db_config)
         cursor = conn.cursor()
 
-        # Clear future entries, preserve currently executing one
-        # Delete entries that have already ended OR haven't started yet
-        # This preserves any observation currently in progress
+        # Keep what we are committed to (entries starting before the commit
+        # horizon, see database.get_committed_observations), drop the rest
         cursor.execute("""
             DELETE FROM queues_targets
             WHERE queue_id = 2
             AND (time_end <= NOW() OR time_start >= %s)
-        """, (schedule_start_time,))
+        """, (commit_horizon,))
+
+        # A forced or GRB plan starts at the horizon, before the committed
+        # entries end: cut them short so they do not overlap it
+        cursor.execute("""
+            UPDATE queues_targets SET time_end = %s
+            WHERE queue_id = 2
+            AND time_start < %s AND time_end > %s
+        """, (schedule_start_time, schedule_start_time, schedule_start_time))
 
         # Get next qid
         cursor.execute("SELECT COALESCE(MAX(qid), 0) + 1 FROM queues_targets")

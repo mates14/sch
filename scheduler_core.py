@@ -32,8 +32,14 @@ def run_scheduling_algorithm(config, available_telescopes, recorder, force_teles
 
     # Prepare inputs
     logger.info("Preparing scheduler inputs")
+    # The solver uses its whole timelimit and there is overhead on top, so the plan
+    # reaches the database minutes after we start. Everything that begins before
+    # then stays as planned, and the new plan starts after it.
+    plan_lead = config.get_scheduler_param('plan_lead', 300)
+    commit_horizon = datetime.utcnow() + timedelta(seconds=plan_lead)
+
     gpw_dict, reservations, schedule_start_times_by_telescope, celestial_data, slice_centers = _prepare_scheduler_input(
-        resources, config, slice_size, recorder, horizon_functions, force_telescopes
+        resources, config, slice_size, recorder, horizon_functions, force_telescopes, commit_horizon
     )
 
     if not reservations:
@@ -71,6 +77,7 @@ def run_scheduling_algorithm(config, available_telescopes, recorder, force_teles
     return {
         'schedule': schedule,
         'schedule_start_times': schedule_start_times_by_telescope,
+        'commit_horizon': commit_horizon,
         'horizon_functions': horizon_functions,
         'compound_reservations': reservations,
         'celestial_data': celestial_data,
@@ -78,7 +85,8 @@ def run_scheduling_algorithm(config, available_telescopes, recorder, force_teles
     }
 
 
-def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_functions, force_telescopes=None):
+def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_functions, force_telescopes=None,
+                             commit_horizon=None):
     """Prepare all inputs for the scheduler."""
     # Ensure earth locations exist
     resources = astro_utils.ensure_earth_locations(resources)
@@ -88,6 +96,9 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     last_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
     if now.hour < 12:
         last_noon -= timedelta(days=1)
+
+    if commit_horizon is None:
+        commit_horizon = now
 
     # MOVED UP: Fetch requests from all telescopes to determine start time
     all_requests = []
@@ -99,11 +110,13 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
     for resource_name in resources:
         db_config = config.get_resource_db_config(resource_name)
         with database.get_connection(db_config) as conn:
-            target_rows, schedule_start_time = database.fetch_requests(conn, resource_name, last_noon)
+            target_rows, schedule_start_time = database.fetch_requests(conn, resource_name, last_noon,
+                                                                       commit_horizon)
 
             if force_telescopes and resource_name in force_telescopes:
-                schedule_start_time = datetime.utcnow()
-                logger.warning(f"Force mode: overriding schedule start time for {resource_name} to NOW")
+                schedule_start_time = commit_horizon
+                logger.warning(f"Force mode: overriding schedule start time for {resource_name} "
+                               f"to {commit_horizon} (the commit horizon)")
             schedule_start_times_by_resource[resource_name] = schedule_start_time
             # Convert rows to Request objects (existing conversion logic)
             requests = []
@@ -170,8 +183,9 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
                     horizon_alt = horizon_functions[resource_name](altaz.az.degree)
 
                     if altaz.alt.degree > horizon_alt:
-                        # GRB is visible NOW on this telescope! Override start time
-                        schedule_start_times_by_resource[resource_name] = now
+                        # GRB is visible NOW on this telescope! Start as soon as the
+                        # plan can be uploaded, cutting short what is committed
+                        schedule_start_times_by_resource[resource_name] = commit_horizon
                         logger.warning(f"*** URGENT: GRB {grb_req.name} (ID {grb_req.id}) visible NOW "
                                      f"on {resource_name} (alt={altaz.alt.degree:.1f}°, min={horizon_alt:.1f}°) "
                                      f"- Triggering immediate scheduling for this telescope ***")
@@ -237,16 +251,13 @@ def _prepare_scheduler_input(resources, config, slice_size, recorder, horizon_fu
             # Query database to get details about what's being preserved
             db_config = config.get_resource_db_config(resource_name)
             with database.get_connection(db_config) as conn:
-                preserved_obs = database.get_current_executing_observation(conn)
-                if preserved_obs:
-                    # Strip timezone info for calculation
-                    time_end = preserved_obs['time_end']
-                    if time_end.tzinfo is not None:
-                        time_end = time_end.replace(tzinfo=None)
-                    duration_hours = (time_end - datetime.utcnow()).total_seconds() / 3600
+                committed = database.get_committed_observations(conn, commit_horizon)
+                if committed:
+                    kept = ", ".join(f"{obs['tar_id']} {obs['time_start']:%H:%M:%S}-{obs['time_end']:%H:%M:%S}"
+                                     if obs['time_start'] and obs['time_end'] else str(obs['tar_id'])
+                                     for obs in committed)
                     logger.info(f"Scheduling for {resource_name} starts at {telescope_start} "
-                               f"(preserving observation of target {preserved_obs['tar_id']} "
-                               f"ending at {time_end}, {duration_hours:.1f}h remaining)")
+                               f"(committed to {kept})")
                 else:
                     logger.info(f"Scheduling for {resource_name} starts at {telescope_start}")
 
