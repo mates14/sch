@@ -4,14 +4,26 @@ Handles telescope state checking and RTS2 communication.
 """
 
 import logging
-import http.client
 import base64
 import json
+import urllib.request
+import urllib.error
 import psycopg2
 from datetime import datetime, timedelta, timezone
 from operator import attrgetter
 
 logger = logging.getLogger(__name__)
+
+# Never let a stuck telescope/proxy hang the whole scheduling run.
+CENTRALD_TIMEOUT = 10  # seconds
+
+# centrald state bits, from base/kernel/include/status.h
+SERVERD_STATUS_MASK = 0x00f  # day/night phase
+SERVERD_DUSK = 0x002
+SERVERD_NIGHT = 0x003
+SERVERD_ONOFF_MASK = 0x030  # on / standby / soft off / hard off
+SERVERD_ON = 0x000
+BAD_WEATHER = 0x80000000
 
 
 def check_telescope_state(config):
@@ -40,13 +52,16 @@ def _check_single_telescope(name, rts2_config):
             return False
 
         # Parse state
-        on_state = (state_value & 0x30) >> 4
-        day_state = state_value & 0x0f
+        on_state = state_value & SERVERD_ONOFF_MASK
+        day_state = state_value & SERVERD_STATUS_MASK
 
-        # Available if ON (0) and DUSK (2) or NIGHT (3)
-        is_available = (on_state == 0 and day_state in [2, 3])
+        # Available if ON and DUSK or NIGHT
+        is_available = (on_state == SERVERD_ON
+                        and day_state in (SERVERD_DUSK, SERVERD_NIGHT))
 
-        logger.info(f"Telescope {name}: state=0x{state_value:x}, available={is_available}")
+        logger.info(f"Telescope {name}: state=0x{state_value:x}, "
+                    f"available={is_available}"
+                    f"{' (bad weather)' if state_value & BAD_WEATHER else ''}")
         return is_available
 
     except Exception as e:
@@ -54,27 +69,65 @@ def _check_single_telescope(name, rts2_config):
         return False
 
 
+def _base_urls(rts2_config):
+    """
+    Ordered list of API base URLs to try for one telescope.
+
+    'url' is the primary route, 'url_fallback' (a string or a list of strings)
+    optional alternatives to the same telescope - e.g. going through the other
+    site's reverse proxy when the direct one is down.
+    """
+    urls = [rts2_config["url"]]
+
+    fallback = rts2_config.get("url_fallback")
+    if isinstance(fallback, str):
+        urls.append(fallback)
+    elif fallback:
+        urls.extend(fallback)
+
+    return urls
+
+
 def _get_centrald_state(rts2_config):
-    """Get centrald state from RTS2 JSON API."""
-    url = rts2_config["url"].replace('http://', '')
-    host_parts = url.split(':')
-    host = host_parts[0]
-    port = int(host_parts[1]) if len(host_parts) > 1 else 8889
+    """
+    Get centrald state from the RTS2 JSON API.
+
+    The configured URL is the base of the API, and is used as given: it can be
+    plain http straight to an rts2-httpd ("http://localhost:8889") or https to
+    a reverse-proxied one, including under a path prefix
+    ("https://lascaux50.asu.cas.cz/images").  rts2-httpd now binds localhost
+    only, so anything remote goes through the site's Apache proxy.
+    """
+    last_error = None
+
+    for base_url in _base_urls(rts2_config):
+        try:
+            return _fetch_centrald_state(base_url, rts2_config)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"centrald query via {base_url} failed: {e}")
+
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def _fetch_centrald_state(base_url, rts2_config):
+    """Fetch centrald state from one specific API base URL."""
+    url = base_url.rstrip('/') + '/api/get?d=centrald'
 
     auth = base64.b64encode(
         f"{rts2_config['user']}:{rts2_config['password']}".encode()
     ).decode().strip()
 
-    conn = http.client.HTTPConnection(host, port)
-    conn.request("GET", "/api/get?d=centrald", None,
-                {"Authorization": f"Basic {auth}"})
+    request = urllib.request.Request(url, headers={
+        "Authorization": f"Basic {auth}",
+        "Accept": "application/json",
+    })
 
-    response = conn.getresponse()
-    if response.status != 200:
-        logger.error(f"HTTP error {response.status}")
-        return None
+    with urllib.request.urlopen(request, timeout=CENTRALD_TIMEOUT) as response:
+        data = json.load(response)
 
-    data = json.loads(response.read())
     return data.get('state')
 
 
